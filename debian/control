@@ -1,0 +1,22 @@
+Source: freedomnas-profiles
+Section: admin
+Priority: optional
+Maintainer: FreedomNAS Team <dev@freedomnas.io>
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13)
+Homepage: https://codeberg.org/freedomnas/freedomnas-profiles
+Vcs-Browser: https://codeberg.org/freedomnas/freedomnas-profiles
+Vcs-Git: https://codeberg.org/freedomnas/freedomnas-profiles.git
+
+Package: freedomnas-profiles
+Architecture: all
+Depends: ${misc:Depends}
+Recommends: freedomnas-core
+Description: FreedomNAS OS Profiles — JSON Translator Layer
+ Contains OS-specific command profiles (JSON) for:
+  • Debian (with package managers, systemd, etc.)
+  • FreeBSD (with pkg, rc.conf, etc.)
+  • Arch Linux (with pacman, systemd, etc.)
+ .
+ These profiles abstract OS-specific commands so FreedomNAS Core can
+ provision storage appliances universally across different OSes.
