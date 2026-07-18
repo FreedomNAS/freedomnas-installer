@@ -82,6 +82,8 @@ class DiskInstaller:
     def partition_disk(self) -> None:
         """Wipe and repartition the selected disk using sgdisk."""
         disk = self.config.disk
+        if not disk:
+            raise RuntimeError("config.disk not set — select_disk() must run first")
         Logger.info(f"Partitioning disk: {disk}")
 
         # Wipe existing partition tables
@@ -98,6 +100,8 @@ class DiskInstaller:
     def format_partitions(self) -> None:
         """Format the EFI partition as FAT32. The rpool partition is formatted by ZFSInstaller."""
         efi_part = self.config.part1
+        if not efi_part:
+            raise RuntimeError("config.part1 not set — partition_disk() must run first")
         Logger.info(f"Formatting EFI partition: {efi_part}")
         run_command(["mkfs.vfat", "-F", "32", "-n", "EFI", efi_part])
         Logger.info("EFI partition formatted as FAT32")
