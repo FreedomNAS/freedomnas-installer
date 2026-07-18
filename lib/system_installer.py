@@ -182,10 +182,10 @@ class SystemInstaller:
         write_file("/mnt/etc/hosts", content)
 
     def _write_fstab(self) -> None:
-        if self.config.boot_mode == "UEFI" and self.config.part2:
-            efi_line = f"{self.config.part2}  /boot/efi  vfat  defaults  0  2\n"
-        else:
-            efi_line = "# No EFI partition (BIOS mode)\n"
+        # The ESP is used in both boot modes now (efibootmgr reads the UKI
+        # from it directly on UEFI; Clover's boot7/CLOVERX64.efi and the
+        # UKI both live on it on BIOS), so it's always mounted at /boot/efi.
+        efi_line = f"{self.config.part1}  /boot/efi  vfat  defaults  0  2\n"
         content = (
             "# /etc/fstab — ZFS datasets are mounted by ZFS, not fstab\n"
             f"{efi_line}"

@@ -18,11 +18,10 @@ Execution order follows spec §8.3 exactly:
   13. prompt_additional_users()    ← BEFORE packages
   14. install_packages()
   15. install_bootloader()
-  16. configure_bpool_import()
-  17. create_firstboot_service()
-  18. save_installation_config()   ← writes config.yaml to ZFS
-  19. cleanup()
-  20. show_completion()
+  16. create_firstboot_service()
+  17. save_installation_config()   ← writes config.yaml to ZFS
+  18. cleanup()
+  19. show_completion()
 
 Recovery mode (spec §8.4):
   Triggered when an existing ZFS pool with .freedomnas dataset is detected.
@@ -172,7 +171,7 @@ class FreedomNASInstaller:
     # ------------------------------------------------------------------
 
     def _save_installation_config(self) -> None:
-        """Write config.yaml to the .freedomnas ZFS dataset (step 18)."""
+        """Write config.yaml to the .freedomnas ZFS dataset (step 17)."""
         Logger.info("Saving installation configuration to ZFS dataset...")
         try:
             from freedomnas.config import ConfigurationManager
@@ -295,17 +294,16 @@ class FreedomNASInstaller:
             # Step 14 — packages
             self.packages.install_packages()
 
-            # Steps 15–16 — bootloader
+            # Step 15 — bootloader
             self.bootloader.install_bootloader()
-            self.bootloader.configure_bpool_import()
 
-            # Step 17 — first-boot WebUI service
+            # Step 16 — first-boot WebUI service
             self.packages.create_firstboot_service()
 
-            # Step 18 — persist config to ZFS
+            # Step 17 — persist config to ZFS
             self._save_installation_config()
 
-            # Steps 19–20
+            # Steps 18–19
             self._cleanup()
             self._show_completion()
 

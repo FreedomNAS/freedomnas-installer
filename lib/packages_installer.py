@@ -20,10 +20,10 @@ _BASE_PACKAGES = [
     "linux-image-amd64",
     "linux-headers-amd64",
     "zfsutils-linux",
-    "zfs-initramfs",
+    "zfs-dracut",             # dracut module providing ZFS root support in the UKI
     "zfs-zed",
-    "grub-efi-amd64",       # pulled in only on UEFI; harmless on BIOS
-    "grub-pc",               # BIOS GRUB (apt will choose correctly)
+    "dracut",
+    "efibootmgr",
     "dosfstools",            # mkfs.vfat for EFI
     "python3",
     "python3-pip",

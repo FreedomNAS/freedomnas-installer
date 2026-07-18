@@ -1,15 +1,19 @@
 """
 FreedomNAS Installer — ZFS pool and dataset creation.
 
-Always uses /dev/disk/by-id paths (spec §8.6).
+Always uses /dev/disk/by-id paths.
 
-Pool layout:
-  bpool — boot pool (simple, grub-compatible features only)
-  rpool — root pool (all features enabled, lz4 compression)
+A single, full-featured rpool — no separate bpool. That split only ever
+existed because GRUB's built-in ZFS reader can only parse a restricted
+feature set; nothing at boot time reads ZFS directly anymore (the UKI's
+own dracut-built initramfs mounts root via the kernel's full-featured ZFS
+driver), so there's nothing left that needs a feature-limited pool.
 
 Datasets created under rpool:
   rpool/ROOT
-  rpool/ROOT/debian          ← OS root (mountpoint /)
+  rpool/ROOT/debian          ← OS root (mountpoint /), /boot is a plain
+                               directory here (the kernel+initramfs live
+                               in the UKI on the ESP, not in ZFS)
   rpool/home                 ← Home directories
   rpool/var
   rpool/var/log
@@ -18,23 +22,7 @@ Datasets created under rpool:
 
 from __future__ import annotations
 
-from installer_modules import Logger, DialogManager, Configuration, run_command, write_file
-
-
-# Canonical pool features compatible with GRUB's ZFS support
-_BPOOL_FEATURES = ",".join([
-    "async_destroy",
-    "bookmarks",
-    "embedded_data",
-    "empty_bpobj",
-    "enabled_txg",
-    "extensible_dataset",
-    "filesystem_limits",
-    "hole_birth",
-    "large_blocks",
-    "lz4_compress",
-    "spacemap_histogram",
-])
+from installer_modules import Logger, DialogManager, Configuration, run_command
 
 
 class ZFSInstaller:
@@ -50,41 +38,10 @@ class ZFSInstaller:
     # ------------------------------------------------------------------
 
     def create_zfs_pool(self) -> None:
-        """Create bpool and rpool on the selected partitions."""
-        self._create_bpool()
+        """Create rpool and its datasets on the selected partition."""
         self._create_rpool()
         self._create_datasets()
-        Logger.info("ZFS pools and datasets created successfully")
-
-    def configure_bpool_import(self) -> None:
-        """
-        Create a systemd service inside the chroot to import bpool at boot.
-        Falls back to a cron @reboot entry if systemd is not available.
-        """
-        Logger.info("Configuring bpool auto-import at boot...")
-
-        service_content = (
-            "[Unit]\n"
-            "Description=Import bpool\n"
-            "DefaultDependencies=no\n"
-            "Before=zfs-import-scan.service\n"
-            "Before=zfs-import-cache.service\n\n"
-            "[Service]\n"
-            "Type=oneshot\n"
-            "RemainAfterExit=yes\n"
-            f"ExecStart=/sbin/zpool import -N -o cachefile=none {self.config.bpool_name}\n"
-            "ExecStartPost=/bin/zfs mount -a\n\n"
-            "[Install]\n"
-            "WantedBy=zfs-import.target\n"
-        )
-        service_path = f"/mnt/etc/systemd/system/zfs-import-{self.config.bpool_name}.service"
-        write_file(service_path, service_content)
-
-        run_command([
-            "chroot", "/mnt",
-            "systemctl", "enable", f"zfs-import-{self.config.bpool_name}.service",
-        ], check=False)
-        Logger.info("bpool import service configured")
+        Logger.info("ZFS pool and datasets created successfully")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -108,27 +65,8 @@ class ZFSInstaller:
                     continue
         return part
 
-    def _create_bpool(self) -> None:
-        bpart = self._pool_partition("part3")
-        Logger.info(f"Creating bpool on {bpart}...")
-        run_command([
-            "zpool", "create",
-            "-o", "ashift=12",
-            "-o", f"compatibility=grub2",
-            "-O", "acltype=posixacl",
-            "-O", "canmount=off",
-            "-O", "compression=lz4",
-            "-O", "devices=off",
-            "-O", "normalization=formD",
-            "-O", "xattr=sa",
-            "-O", "mountpoint=/boot",
-            "-R", "/mnt",
-            self.config.bpool_name,
-            bpart,
-        ])
-
     def _create_rpool(self) -> None:
-        rpart = self._pool_partition("part4")
+        rpart = self._pool_partition("part2")
         Logger.info(f"Creating rpool on {rpart}...")
         run_command([
             "zpool", "create",
@@ -148,14 +86,9 @@ class ZFSInstaller:
 
     def _create_datasets(self) -> None:
         pool = self.config.pool_name
-        bpool = self.config.bpool_name
         Logger.info("Creating ZFS datasets...")
 
         datasets = [
-            # bpool datasets
-            (["zfs", "create", "-o", "canmount=off", "-o", "mountpoint=none",      f"{bpool}/BOOT"], True),
-            (["zfs", "create", "-o", "mountpoint=/boot",                           f"{bpool}/BOOT/debian"], True),
-
             # rpool ROOT
             (["zfs", "create", "-o", "canmount=off", "-o", "mountpoint=none",      f"{pool}/ROOT"], True),
             (["zfs", "create", "-o", "canmount=noauto", "-o", "mountpoint=/",      f"{pool}/ROOT/debian"], True),
@@ -173,7 +106,8 @@ class ZFSInstaller:
         for cmd, check in datasets:
             run_command(cmd, check=check)
 
-        # Set bootfs
+        # Set bootfs (metadata only — no boot-time consumer reads it anymore,
+        # but it's a cheap, standard way to record the intended boot dataset)
         run_command(["zpool", "set", f"bootfs={pool}/ROOT/debian", pool])
 
         # Mount root dataset explicitly

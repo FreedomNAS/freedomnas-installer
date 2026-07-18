@@ -1,19 +1,17 @@
 """
 FreedomNAS Installer — Disk detection, partitioning, and formatting.
 
-Partitioning scheme (spec §8.6):
-  UEFI:
-    Part 1 — 1 MiB  — BIOS-boot  (sgdisk type EF02, for hybrid MBR)
-    Part 2 — 512 MiB — EFI System (sgdisk type EF00, FAT32)
-    Part 3 — 2 GiB  — bpool      (sgdisk type BF01, ZFS)
-    Part 4 — rest   — rpool      (sgdisk type BF00, ZFS)
+Partitioning scheme — identical regardless of boot mode. Nothing at boot
+time reads ZFS directly (the UKI's own dracut-built initramfs mounts root),
+so there's no GRUB-compatible bpool to carve out, and no separate BIOS-boot
+partition either: boot0/boot1 (the legacy-BIOS bootstrap, BIOS mode only)
+live in the MBR gap and the ESP's own boot sector respectively, consuming
+no partition of their own. See bootloader_installer.py.
 
-  BIOS:
-    Part 1 — 1 MiB  — BIOS-boot  (sgdisk type EF02)
-    Part 2 — 2 GiB  — bpool      (sgdisk type BF01)
-    Part 3 — rest   — rpool      (sgdisk type BF00)
+  Part 1 — 512 MiB — EFI System (sgdisk type EF00, FAT32)
+  Part 2 — rest    — rpool      (sgdisk type BF00, ZFS)
 
-Always uses /dev/disk/by-id paths when creating ZFS pools (spec §8.6).
+Always uses /dev/disk/by-id paths when creating ZFS pools.
 """
 
 from __future__ import annotations
@@ -90,10 +88,7 @@ class DiskInstaller:
         run_command(["sgdisk", "--zap-all", disk])
         run_command(["sgdisk", "--clear", disk])
 
-        if self.config.boot_mode == "UEFI":
-            self._partition_uefi(disk)
-        else:
-            self._partition_bios(disk)
+        self._partition(disk)
 
         # Force kernel to re-read partition table
         run_command(["partprobe", disk], check=False)
@@ -101,12 +96,8 @@ class DiskInstaller:
         Logger.info("Disk partitioned successfully")
 
     def format_partitions(self) -> None:
-        """Format the EFI partition (UEFI only). ZFS partitions are formatted by ZFSInstaller."""
-        if self.config.boot_mode != "UEFI":
-            Logger.info("BIOS mode — no EFI partition to format")
-            return
-
-        efi_part = self.config.part2
+        """Format the EFI partition as FAT32. The rpool partition is formatted by ZFSInstaller."""
+        efi_part = self.config.part1
         Logger.info(f"Formatting EFI partition: {efi_part}")
         run_command(["mkfs.vfat", "-F", "32", "-n", "EFI", efi_part])
         Logger.info("EFI partition formatted as FAT32")
@@ -176,32 +167,12 @@ class DiskInstaller:
         Logger.warn(f"No /dev/disk/by-id symlink found for {device}, using path directly")
         return device
 
-    def _partition_uefi(self, disk: str) -> None:
-        """Create 4-partition UEFI layout."""
-        # Part 1: BIOS-boot (1 MiB, EF02)
-        run_command(["sgdisk", "-n", "1:1MiB:+1MiB", "-t", "1:EF02", disk])
-        # Part 2: EFI System (512 MiB, EF00)
-        run_command(["sgdisk", "-n", "2:0:+512MiB", "-t", "2:EF00", disk])
-        # Part 3: bpool (2 GiB, BF01)
-        run_command(["sgdisk", "-n", "3:0:+2GiB", "-t", "3:BF01", disk])
-        # Part 4: rpool (rest, BF00)
-        run_command(["sgdisk", "-n", "4:0:-0", "-t", "4:BF00", disk])
+    def _partition(self, disk: str) -> None:
+        """Create the unified 2-partition layout (ESP + rpool), same for UEFI and BIOS."""
+        # Part 1: EFI System (512 MiB, EF00)
+        run_command(["sgdisk", "-n", "1:0:+512MiB", "-t", "1:EF00", disk])
+        # Part 2: rpool (rest, BF00)
+        run_command(["sgdisk", "-n", "2:0:-0", "-t", "2:BF00", disk])
 
         self.config.part1 = f"{disk}1"
         self.config.part2 = f"{disk}2"
-        self.config.part3 = f"{disk}3"
-        self.config.part4 = f"{disk}4"
-
-    def _partition_bios(self, disk: str) -> None:
-        """Create 3-partition BIOS legacy layout."""
-        # Part 1: BIOS-boot (1 MiB, EF02)
-        run_command(["sgdisk", "-n", "1:1MiB:+1MiB", "-t", "1:EF02", disk])
-        # Part 2: bpool (2 GiB, BF01)
-        run_command(["sgdisk", "-n", "2:0:+2GiB", "-t", "2:BF01", disk])
-        # Part 3: rpool (rest, BF00)
-        run_command(["sgdisk", "-n", "3:0:-0", "-t", "3:BF00", disk])
-
-        self.config.part1 = f"{disk}1"
-        self.config.part2 = None
-        self.config.part3 = f"{disk}2"
-        self.config.part4 = f"{disk}3"

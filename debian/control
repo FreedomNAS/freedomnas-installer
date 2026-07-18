@@ -1,22 +1,23 @@
-Source: freedomnas-profiles
+Source: freedomnas-installer
 Section: admin
 Priority: optional
 Maintainer: FreedomNAS Team <dev@freedomnas.io>
 Standards-Version: 4.6.2
 Build-Depends: debhelper-compat (= 13)
-Homepage: https://codeberg.org/freedomnas/freedomnas-profiles
-Vcs-Browser: https://codeberg.org/freedomnas/freedomnas-profiles
-Vcs-Git: https://codeberg.org/freedomnas/freedomnas-profiles.git
+Homepage: https://codeberg.org/freedomnas/freedomnas-installer
+Vcs-Browser: https://codeberg.org/freedomnas/freedomnas-installer
+Vcs-Git: https://codeberg.org/freedomnas/freedomnas-installer.git
 
-Package: freedomnas-profiles
+Package: freedomnas-installer
 Architecture: all
-Depends: ${misc:Depends}
-Recommends: freedomnas-core
-Description: FreedomNAS OS Profiles — JSON Translator Layer
- Contains OS-specific command profiles (JSON) for:
-  • Debian (with package managers, systemd, etc.)
-  • FreeBSD (with pkg, rc.conf, etc.)
-  • Arch Linux (with pacman, systemd, etc.)
+Depends: ${misc:Depends}, freedomnas-core, freedomnas-profiles, python3 (>= 3.7), dialog, gdisk, dosfstools, zfsutils-linux, debootstrap, dracut, efibootmgr, parted
+Description: FreedomNAS ZFS-on-root installer
+ Interactive TUI installer that provisions a FreedomNAS ZFS-on-root system:
+  • Disk partitioning and ZFS pool/dataset creation
+  • Base system installation via debootstrap
+  • Boot chain setup — a dracut-built Unified Kernel Image (UKI), loaded
+    directly via efibootmgr on UEFI or via Clover on legacy BIOS
+  • User and package configuration
  .
- These profiles abstract OS-specific commands so FreedomNAS Core can
- provision storage appliances universally across different OSes.
+ Depends on freedomnas-core for command execution (freedomnas.engine) and
+ freedomnas-profiles for the OS command translation tables.

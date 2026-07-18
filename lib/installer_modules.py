@@ -218,14 +218,11 @@ class Configuration:
         # Disk layout (set by DiskInstaller)
         self.disk: Optional[str] = None            # e.g. /dev/sda
         self.disk_by_id: Optional[str] = None      # /dev/disk/by-id/...
-        self.part1: Optional[str] = None           # BIOS-boot or ESP
-        self.part2: Optional[str] = None           # EFI (UEFI mode only)
-        self.part3: Optional[str] = None           # bpool partition
-        self.part4: Optional[str] = None           # rpool partition
+        self.part1: Optional[str] = None           # ESP (FAT32)
+        self.part2: Optional[str] = None           # rpool partition
 
         # ZFS
         self.pool_name: str = "rpool"
-        self.bpool_name: str = "bpool"
 
         # System
         self.hostname: str = "freedomnas"
@@ -283,13 +280,15 @@ def run_command(args: List[str], check: bool = True, timeout: int = 300) -> subp
         raise
 
 
-def run_in_chroot(args: List[str], chroot_dir: str = "/mnt", check: bool = True) -> subprocess.CompletedProcess:
+def run_in_chroot(
+    args: List[str], chroot_dir: str = "/mnt", check: bool = True, timeout: int = 300
+) -> subprocess.CompletedProcess:
     """
     Run a command inside a chroot environment.
 
     Wraps the command as: chroot <chroot_dir> <args...>
     """
-    return run_command(["chroot", chroot_dir] + args, check=check)
+    return run_command(["chroot", chroot_dir] + args, check=check, timeout=timeout)
 
 
 def write_file(path: str, content: str, mode: int = 0o644) -> None:

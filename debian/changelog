@@ -1,8 +1,10 @@
-freedomnas-profiles (4.0.0-1) unstable; urgency=medium
+freedomnas-installer (4.0.0-1) unstable; urgency=medium
 
   * Initial release
-  * JSON profiles for Debian, FreeBSD, and Arch Linux
-  * Universal command abstraction via JSON Translator Layer
-  * Extensible for future OS support
+  * ZFS-on-root installer: disk partitioning, ZFS pool/dataset setup,
+    base system install, user and package configuration
+  * Boot chain: dracut-built Unified Kernel Image (UKI), loaded directly
+    via efibootmgr on UEFI or via Clover on legacy BIOS
+  * Replaces the previous GRUB + bpool boot chain
 
- -- FreedomNAS Team <dev@freedomnas.io>  Thu, 22 May 2026 14:00:00 +0000
+ -- FreedomNAS Team <dev@freedomnas.io>  Thu, 16 Jul 2026 15:00:00 +0000
