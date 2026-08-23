@@ -2,6 +2,12 @@
 """
 FreedomNAS ZFS-on-Root Installer — Main entry point.
 
+PARKED: superseded by freedomnas-image-builder's pre-built images
+(ADR-002, IMAGE-BASED-INSTALLATION.md). This tool is kept functional
+for reference and potential future refactor, but is not the recommended
+or actively maintained install path — see prints_parked_warning() below
+and freedomnas-installer/README.md.
+
 Execution order follows spec §8.3 exactly:
   1.  check_root()
   2.  detect_boot_mode()
@@ -46,6 +52,24 @@ from zfs_installer import ZFSInstaller
 from bootloader_installer import BootloaderInstaller
 from users_installer import UsersInstaller
 from packages_installer import PackagesInstaller
+
+
+# ---------------------------------------------------------------------------
+# Parked-tool warning
+# ---------------------------------------------------------------------------
+
+def print_parked_warning() -> None:
+    """
+    freedomnas-installer is parked, not removed (see setup.py's module
+    docstring and README.md). This tool remains fully functional -- the
+    warning is meant to discourage new usage, not block it.
+    """
+    print(
+        "NOTE: freedomnas-installer is PARKED. New installs should use "
+        "freedomnas-image-builder (pre-built images, ADR-002). This tool "
+        "remains functional but is not actively maintained.",
+        file=sys.stderr,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -324,4 +348,5 @@ class FreedomNASInstaller:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    print_parked_warning()
     FreedomNASInstaller().run()

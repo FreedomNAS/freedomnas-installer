@@ -23,6 +23,12 @@ Deploying the Clover binaries themselves (boot0/boot1 boot sectors, the
 CLOVERX64.efi/BOOTX64.efi payload, config.plist) is pure file I/O, not a
 shell command, so it needs no profile entry — same precedent as
 write_file() for GRUB's own config previously.
+
+PARKED: the Clover binaries and zz-dracut-uki now live in
+freedomnas-profiles/assets/ — moved there so freedomnas-image-builder can
+share the same vendored copy instead of a second one drifting out of sync.
+Resolved via the same sibling-repo search order used elsewhere for profile
+JSON (see freedomnas-core/engine.py's PROFILE_SEARCH_PATHS).
 """
 
 from __future__ import annotations
@@ -38,7 +44,30 @@ from installer_modules import (
 )
 
 _LIB_DIR = Path(__file__).parent
-_ASSETS_DIR = _LIB_DIR.parent / "assets"
+
+
+def _find_assets_dir() -> Path:
+    """
+    Resolve freedomnas-profiles/assets/ via the same sibling-repo search
+    order engine.py uses for profile JSON — assets moved there so the
+    (parked) installer and freedomnas-image-builder share one vendored copy.
+    """
+    candidates = [
+        Path("/usr/lib/freedomnas/profiles/assets"),         # system install
+        _LIB_DIR.parent.parent / "freedomnas-profiles" / "assets",  # dev sibling repo
+        _LIB_DIR.parent / "os_profiles" / "assets",           # dev local
+        Path("/opt/freedomnas/lib/os_profiles/assets"),       # alternative
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    raise RuntimeError(
+        "Could not locate freedomnas-profiles/assets/ (Clover + zz-dracut-uki). "
+        f"Checked: {', '.join(str(c) for c in candidates)}"
+    )
+
+
+_ASSETS_DIR = _find_assets_dir()
 _CLOVER_DIR = _ASSETS_DIR / "clover"
 _ZZ_DRACUT_UKI = _ASSETS_DIR / "zz-dracut-uki"
 

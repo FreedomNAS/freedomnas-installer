@@ -1,5 +1,14 @@
 # FreedomNAS Installer
 
+> **STATUS: PARKED.** Superseded by
+> [`freedomnas-image-builder`](../freedomnas-image-builder/) for new
+> installs — pre-built, flashable images per ADR-002
+> ([IMAGE-BASED-INSTALLATION.md](../IMAGE-BASED-INSTALLATION.md)),
+> bootable on both UEFI and BIOS from the same file. This installer is
+> kept for reference and possible future refactor (see the ADR's
+> follow-up decision) but is **not actively maintained**. It remains
+> functional and prints a warning on startup pointing here.
+
 Interactive TUI installer that provisions a FreedomNAS ZFS-on-root system on
 Debian. It partitions the disk, creates the ZFS pool and datasets, bootstraps
 the base OS, sets up the boot chain, creates users, installs packages, and
