@@ -125,6 +125,12 @@ def main():
     assert void.bootstrap_method == "tarball", void.bootstrap_method
     assert void.root_dataset == "rpool/ROOT/void", void.root_dataset
 
+    # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is
+    # also the case where host and target edition are the same rolling distro.
+    gentoo = run_clean("gentoo", "/tmp/freedomnas-smoke-gentoo", host_os="gentoo")
+    assert gentoo.bootstrap_method == "tarball", gentoo.bootstrap_method
+    assert gentoo.root_dataset == "rpool/ROOT/gentoo", gentoo.root_dataset
+
     # A BSD host sees only BSD targets, and installs them natively.
     freebsd = run_clean("freebsd", "/tmp/freedomnas-smoke-freebsd", host_os="freebsd")
     assert freebsd.bootstrap_method == "tarball", freebsd.bootstrap_method
