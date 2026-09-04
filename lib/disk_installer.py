@@ -1,53 +1,48 @@
 """
 FreedomNAS Installer — Disk detection, partitioning, and formatting.
 
-Partitioning scheme — identical regardless of boot mode. Nothing at boot
-time reads ZFS directly (the UKI's own dracut-built initramfs mounts root),
-so there's no GRUB-compatible bpool to carve out, and no separate BIOS-boot
-partition either: boot0/boot1 (the legacy-BIOS bootstrap, BIOS mode only)
-live in the MBR gap and the ESP's own boot sector respectively, consuming
-no partition of their own. See bootloader_installer.py.
+Every command in this module comes from the host profile's `partitioning`
+category; nothing about sgdisk, gpart, mkfs or lsblk is written here. The
+layout itself is the one the image builder produces, so an installed system
+and a flashed image are indistinguishable:
 
-  Part 1 — 512 MiB — EFI System (sgdisk type EF00, FAT32)
-  Part 2 — rest    — rpool      (sgdisk type BF00, ZFS)
+  Part 1 — ESP        (EFI System, FAT32) — UKI + Clover payload
+  Part 2 — root pool  (ZFS)
 
-Always uses /dev/disk/by-id paths when creating ZFS pools.
+`partitioning.list_disks` is the one command whose *output* this module
+reads, so its contract is fixed by PROFILE_SPECIFICATION_v1: one disk per
+line, `<name> <size-in-bytes> <model...>`. Every edition's profile is
+responsible for producing that shape with its own native tooling.
 """
 
 from __future__ import annotations
 
 import os
-import subprocess
+from pathlib import Path
 from typing import List, Optional
 
-from installer_modules import (
-    Logger, DialogManager, Configuration,
-    run_command, write_file, directory_exists,
-)
+from context import ExecutionContext
+from installer_modules import Logger, DialogManager, Configuration, directory_exists
+
+_MIN_DISK_BYTES = 4 * 1024 ** 3
 
 
 class DiskInstaller:
     """Handles disk selection, partitioning, and partition formatting."""
 
-    def __init__(self, logger: Logger, dialog: DialogManager, config: Configuration) -> None:
-        self.logger = logger
+    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
         self.dialog = dialog
         self.config = config
+        self.ctx = ctx
 
     # ------------------------------------------------------------------
     # Public steps
     # ------------------------------------------------------------------
 
     def select_disk(self) -> None:
-        """
-        Present a menu of available block devices and store the selected disk
-        in config.disk and config.disk_by_id.
-        """
+        """Present a menu of block devices; store the choice in the config."""
         Logger.info("Detecting available disks...")
         disks = self._list_disks()
-
-        if not disks:
-            raise RuntimeError("No suitable block devices found")
 
         items = [(d["device"], f"{d['model']} ({d['size']})") for d in disks]
         items.append(("CUSTOM", "Enter disk path manually"))
@@ -80,82 +75,103 @@ class DiskInstaller:
         Logger.info(f"Selected disk: {self.config.disk} ({self.config.disk_by_id})")
 
     def partition_disk(self) -> None:
-        """Wipe and repartition the selected disk using sgdisk."""
+        """Wipe the disk and create the ESP + root-pool layout."""
         disk = self.config.disk
         if not disk:
             raise RuntimeError("config.disk not set — select_disk() must run first")
+
         Logger.info(f"Partitioning disk: {disk}")
+        esp_size = self.ctx.meta("esp_size", "512MiB")
 
-        # Wipe existing partition tables
-        run_command(["sgdisk", "--zap-all", disk])
-        run_command(["sgdisk", "--clear", disk])
+        self.ctx.host_run("partitioning", "wipe", disk=disk, check=False)
+        self.ctx.host_run("partitioning", "clear", disk=disk)
+        self.ctx.host_run("partitioning", "create_esp", disk=disk, esp_size=esp_size)
+        self.ctx.host_run("partitioning", "create_root", disk=disk)
 
-        self._partition(disk)
+        if self.ctx.has("partitioning", "probe", target=False):
+            self.ctx.host_run("partitioning", "probe", disk=disk, check=False)
+        if self.ctx.has("partitioning", "settle", target=False):
+            self.ctx.host_run("partitioning", "settle", check=False)
 
-        # Force kernel to re-read partition table
-        run_command(["partprobe", disk], check=False)
-        run_command(["udevadm", "settle"])
-        Logger.info("Disk partitioned successfully")
+        self.config.part1 = self._partition_path(disk, 1)
+        self.config.part2 = self._partition_path(disk, 2)
+        Logger.info(f"Partitions: ESP={self.config.part1} pool={self.config.part2}")
 
     def format_partitions(self) -> None:
-        """Format the EFI partition as FAT32. The rpool partition is formatted by ZFSInstaller."""
-        efi_part = self.config.part1
-        if not efi_part:
+        """Format the ESP. The pool partition is handled by ZFSInstaller."""
+        if not self.config.part1:
             raise RuntimeError("config.part1 not set — partition_disk() must run first")
-        Logger.info(f"Formatting EFI partition: {efi_part}")
-        run_command(["mkfs.vfat", "-F", "32", "-n", "EFI", efi_part])
-        Logger.info("EFI partition formatted as FAT32")
+        Logger.info(f"Formatting ESP: {self.config.part1}")
+        self.ctx.host_run("partitioning", "format_esp", device=self.config.part1)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _list_disks(self) -> List[dict]:
-        """Return a list of dicts with {device, model, size} for block devices."""
+        """
+        Parse `partitioning.list_disks` output: one disk per line, as
+        `<name> <size-in-bytes> <model...>`.
+        """
         try:
-            result = run_command(
-                ["lsblk", "-d", "-o", "NAME,SIZE,MODEL", "--noheadings", "--bytes"],
-                check=False,
-            )
-            disks = []
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(None, 2)
-                if len(parts) < 2:
-                    continue
-                name = parts[0]
-                size = parts[1]
-                model = parts[2].strip() if len(parts) > 2 else "Unknown"
-                device = f"/dev/{name}"
-                # Skip loop devices, CDROMs, and very small disks (< 4 GiB)
-                if name.startswith("loop") or name.startswith("sr"):
-                    continue
-                try:
-                    if int(size) < 4 * 1024 ** 3:
-                        continue
-                except ValueError:
-                    pass
-                disks.append({"device": device, "model": model, "size": self._human_size(size)})
-            return disks
+            stdout, _ = self.ctx.host_run("partitioning", "list_disks", check=False, timeout=60)
         except Exception as exc:
-            Logger.warn(f"lsblk failed: {exc}")
+            Logger.warn(f"Disk listing failed: {exc}")
             return []
 
-    def _human_size(self, size_bytes: str) -> str:
-        """Convert bytes string to human-readable size."""
+        disks = []
+        for line in stdout.strip().splitlines():
+            parts = line.split(None, 2)
+            if len(parts) < 2:
+                continue
+            name, size = parts[0], parts[1]
+            model = parts[2].strip() if len(parts) > 2 else "Unknown"
+            if name.startswith(("loop", "sr", "zram", "cd")):
+                continue
+            try:
+                if int(size) < _MIN_DISK_BYTES:
+                    continue
+            except ValueError:
+                continue
+            disks.append({
+                "device": f"/dev/{name}",
+                "model": model or "Unknown",
+                "size": self._human_size(size),
+            })
+        return disks
+
+    @staticmethod
+    def _human_size(size_bytes: str) -> str:
         try:
-            b = int(size_bytes)
-            for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-                if b < 1024:
-                    return f"{b:.1f} {unit}"
-                b //= 1024
-            return f"{b:.1f} PiB"
+            value = float(size_bytes)
         except (ValueError, TypeError):
             return size_bytes
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if value < 1024:
+                return f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{value:.1f} PiB"
 
-    def _resolve_by_id(self, device: str) -> str:
+    @staticmethod
+    def _partition_path(disk: str, number: int) -> str:
         """
-        Resolve a device path to its /dev/disk/by-id equivalent.
-        Falls back to the original path if no by-id link is found.
+        Resolve partition N of a disk.
+
+        Naming is a kernel/device convention, not a command: /dev/sda1 but
+        /dev/nvme0n1p1 and /dev/ada0p1. Prefer whatever actually appeared on
+        the filesystem, and fall back to the "digit-terminated name gets a p"
+        rule that every one of those conventions follows.
+        """
+        for candidate in (f"{disk}p{number}", f"{disk}{number}"):
+            if Path(candidate).exists():
+                return candidate
+        return f"{disk}p{number}" if disk[-1:].isdigit() else f"{disk}{number}"
+
+    @staticmethod
+    def _resolve_by_id(device: str) -> str:
+        """
+        Resolve a device to a stable /dev/disk/by-id path where the platform
+        provides one (Linux); elsewhere the device path is already stable.
         """
         by_id_dir = "/dev/disk/by-id"
         if not directory_exists(by_id_dir):
@@ -163,20 +179,9 @@ class DiskInstaller:
         for name in os.listdir(by_id_dir):
             link = os.path.join(by_id_dir, name)
             try:
-                target = os.path.realpath(link)
-                if target == os.path.realpath(device):
+                if os.path.realpath(link) == os.path.realpath(device):
                     return link
             except OSError:
                 continue
-        Logger.warn(f"No /dev/disk/by-id symlink found for {device}, using path directly")
+        Logger.warn(f"No stable by-id path for {device}; using it directly")
         return device
-
-    def _partition(self, disk: str) -> None:
-        """Create the unified 2-partition layout (ESP + rpool), same for UEFI and BIOS."""
-        # Part 1: EFI System (512 MiB, EF00)
-        run_command(["sgdisk", "-n", "1:0:+512MiB", "-t", "1:EF00", disk])
-        # Part 2: rpool (rest, BF00)
-        run_command(["sgdisk", "-n", "2:0:-0", "-t", "2:BF00", disk])
-
-        self.config.part1 = f"{disk}1"
-        self.config.part2 = f"{disk}2"

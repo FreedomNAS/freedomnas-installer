@@ -1,101 +1,152 @@
 """
-FreedomNAS Installer — Base system setup.
+FreedomNAS Installer — base system provisioning.
 
-Covers steps: detect_boot_mode, select_mirror, prompt_hostname,
-install_base_system, configure_system, setup_chroot.
+Covers firmware detection, the hostname/timezone/mirror prompts, the
+bootstrap of the target root, the OS-specific configuration files, and the
+chroot bind mounts.
+
+Two bootstrap methods, both declared per edition in
+`installer_meta.bootstrap_methods`:
+
+  debootstrap  — the distro's own bootstrapper (debootstrap, pacstrap,
+                 basestrap, xbps-install -r ...) named by the profile
+  tarball      — download and unpack a rootfs tarball (the distro's own
+                 rootfs.tar.gz, or an exported container rootfs)
+
+The tarball path is what makes a new edition cheap: a distro that ships a
+rootfs tarball needs no bootstrapper on the installer host at all.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Optional
+import shutil
+import tempfile
+from pathlib import Path
+from typing import List, Optional
 
+from context import ExecutionContext
 from installer_modules import (
-    Logger, DialogManager, Configuration,
-    run_command, run_in_chroot, write_file, directory_exists,
+    Logger, DialogManager, Configuration, directory_exists,
 )
 
-
-# Mirrors indexed by country code: (label, url)
-_MIRRORS: dict[str, tuple[str, str]] = {
-    "IT": ("Italy (debian.connesi.it)",       "http://debian.connesi.it/debian"),
-    "DE": ("Germany (ftp.de.debian.org)",     "http://ftp.de.debian.org/debian"),
-    "FR": ("France (ftp.fr.debian.org)",      "http://ftp.fr.debian.org/debian"),
-    "US": ("United States (deb.debian.org)",  "http://deb.debian.org/debian"),
-    "UK": ("United Kingdom (ftp.uk.debian.org)", "http://ftp.uk.debian.org/debian"),
-    "NL": ("Netherlands (ftp.nl.debian.org)", "http://ftp.nl.debian.org/debian"),
-    "CH": ("Switzerland (ftp.ch.debian.org)", "http://ftp.ch.debian.org/debian"),
-    "PL": ("Poland (ftp.pl.debian.org)",      "http://ftp.pl.debian.org/debian"),
-    "SE": ("Sweden (ftp.se.debian.org)",      "http://ftp.se.debian.org/debian"),
-    "AU": ("Australia (ftp.au.debian.org)",   "http://ftp.au.debian.org/debian"),
-    "JP": ("Japan (ftp.jp.debian.org)",       "http://ftp.jp.debian.org/debian"),
-    "CA": ("Canada (ftp.ca.debian.org)",      "http://ftp.ca.debian.org/debian"),
-    "BR": ("Brazil (ftp.br.debian.org)",      "http://ftp.br.debian.org/debian"),
-    "ES": ("Spain (ftp.es.debian.org)",       "http://ftp.es.debian.org/debian"),
-}
+# files.webui_cron is deployed by CoreInstaller, together with the scripts
+# it points at, so configure_system() leaves it alone.
+_FILES_OWNED_ELSEWHERE = {"webui_cron"}
 
 
 class SystemInstaller:
-    """Handles OS detection, mirror selection, hostname prompt, and base system install."""
+    """Firmware detection, system prompts, bootstrap and base configuration."""
 
-    def __init__(self, logger: Logger, dialog: DialogManager, config: Configuration) -> None:
-        self.logger = logger
+    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
         self.dialog = dialog
         self.config = config
+        self.ctx = ctx
 
     # ------------------------------------------------------------------
-    # Public steps
+    # Detection and prompts
     # ------------------------------------------------------------------
 
     def detect_boot_mode(self) -> None:
-        """Detect UEFI or BIOS boot mode from /sys/firmware/efi."""
-        if directory_exists("/sys/firmware/efi"):
-            self.config.boot_mode = "UEFI"
-        else:
-            self.config.boot_mode = "BIOS"
+        """UEFI if the firmware exposes efivars, BIOS otherwise."""
+        self.config.boot_mode = "UEFI" if directory_exists("/sys/firmware/efi") else "BIOS"
         Logger.info(f"Boot mode detected: {self.config.boot_mode}")
 
-    def select_mirror(self) -> None:
-        """Let the user pick a Debian mirror (or enter a custom URL)."""
-        Logger.info("Selecting Debian mirror...")
+    def load_defaults(self) -> None:
+        """Seed the configuration from the target profile's installer_meta."""
+        self.config.arch = self.ctx.meta("arch", self.config.arch)
+        self.config.suite = self.ctx.meta("suite", "")
+        self.config.mirror = self.ctx.meta("mirror", "")
+        self.config.rootfs_url = self.ctx.meta("rootfs_tarball_url", "")
 
-        items = [(code, label) for code, (label, _) in _MIRRORS.items()]
+    def select_bootstrap_method(self) -> None:
+        """Pick how the target root gets populated."""
+        methods = self.ctx.bootstrap_methods()
+        if not methods:
+            raise RuntimeError(
+                f"No usable bootstrap method for '{self.config.target_os}' on this host. "
+                f"Declared: {self.ctx.meta('bootstrap_methods', [])}"
+            )
+
+        if len(methods) == 1:
+            self.config.bootstrap_method = methods[0]
+            Logger.info(f"Bootstrap method: {methods[0]}")
+            return
+
+        labels = {
+            "debootstrap": "Native bootstrapper (recommended)",
+            "pacstrap": "Native bootstrapper (recommended)",
+            "basestrap": "Native bootstrapper (recommended)",
+            "xbps": "Native bootstrapper (recommended)",
+            "tarball": "Download and unpack a rootfs tarball",
+        }
+        choice = self.dialog.menu(
+            "Bootstrap Method",
+            f"How should the {self.config.target_os} base system be installed?",
+            [(m, labels.get(m, m)) for m in methods],
+            height=14,
+            width=68,
+            list_height=6,
+        )
+        if not choice:
+            raise RuntimeError("No bootstrap method selected — installation aborted")
+        self.config.bootstrap_method = choice
+        Logger.info(f"Bootstrap method: {choice}")
+
+    def select_mirror(self) -> None:
+        """Pick a package mirror from the list the profile declares."""
+        mirrors = self.ctx.meta("mirrors", []) or []
+        if not mirrors:
+            return
+
+        items = [(m["code"], m["label"]) for m in mirrors]
         items.append(("CUSTOM", "Custom — enter URL manually"))
 
         choice = self.dialog.menu(
-            "Debian Mirror",
-            "Select the Debian mirror closest to you:",
+            "Package Mirror",
+            "Select the mirror closest to you:",
             items,
             height=24,
             width=78,
         )
-
         if not choice:
-            Logger.warn("Mirror selection cancelled — using default (deb.debian.org)")
+            Logger.warn(f"Mirror selection cancelled — using {self.config.mirror}")
             return
 
         if choice == "CUSTOM":
             url = self.dialog.inputbox(
                 "Custom Mirror",
-                "Enter the full Debian mirror URL:",
-                init_text="http://deb.debian.org/debian",
+                "Enter the full mirror URL:",
+                init_text=self.config.mirror,
                 height=10,
                 width=70,
             )
             if url and url.strip():
-                self.config.debian_mirror = url.strip()
-            else:
-                Logger.warn("Custom mirror empty — using default")
-        elif choice in _MIRRORS:
-            _, url = _MIRRORS[choice]
-            self.config.debian_mirror = url
+                self.config.mirror = url.strip()
         else:
-            Logger.warn("Unknown selection — using default mirror")
+            for mirror in mirrors:
+                if mirror["code"] == choice:
+                    self.config.mirror = mirror["url"]
+                    break
 
-        Logger.info(f"Mirror: {self.config.debian_mirror}")
+        Logger.info(f"Mirror: {self.config.mirror}")
+
+    def prompt_rootfs_url(self) -> None:
+        """Ask for the rootfs tarball URL when the tarball method is used."""
+        if self.config.bootstrap_method != "tarball":
+            return
+        url = self.dialog.inputbox(
+            "Rootfs Tarball",
+            f"URL of the {self.config.target_os} rootfs tarball\n"
+            "(the distro's own rootfs.tar.gz, or an exported container rootfs):",
+            init_text=self.config.rootfs_url,
+            height=12,
+            width=76,
+        )
+        if not url or not url.strip():
+            raise RuntimeError("A rootfs tarball URL is required — installation aborted")
+        self.config.rootfs_url = url.strip()
 
     def prompt_hostname(self) -> None:
-        """Prompt the user for the system hostname (spec §8.3 step 4)."""
         hostname = self.dialog.inputbox(
             "System Hostname",
             "Enter the hostname for this FreedomNAS system:\n"
@@ -108,102 +159,133 @@ class SystemInstaller:
             self.config.hostname = hostname.strip()
         Logger.info(f"Hostname: {self.config.hostname}")
 
-    def install_base_system(self) -> None:
-        """Install Debian base system via debootstrap."""
-        Logger.info("Installing Debian base system (debootstrap)...")
-        self._ensure_debootstrap()
-        run_command(
-            [
-                "debootstrap",
-                "--arch=amd64",
-                "trixie",
-                "/mnt",
-                self.config.debian_mirror,
-            ],
-            timeout=1800,
+    def prompt_timezone(self) -> None:
+        timezone = self.dialog.inputbox(
+            "Timezone",
+            "Enter the system timezone (e.g. Europe/Rome):",
+            init_text=self.config.timezone,
+            height=10,
+            width=60,
         )
+        if timezone and timezone.strip():
+            self.config.timezone = timezone.strip()
+        Logger.info(f"Timezone: {self.config.timezone}")
+
+    # ------------------------------------------------------------------
+    # Bootstrap
+    # ------------------------------------------------------------------
+
+    def bootstrap_base_system(self) -> None:
+        """Populate the target root using the selected bootstrap method."""
+        method = self.config.bootstrap_method
+        Logger.info(f"Bootstrapping {self.config.target_os} into {self.config.target_root}...")
+
+        if method == "tarball":
+            self._bootstrap_tarball()
+        else:
+            self.ctx.stage_run(
+                "bootstrap", method,
+                timeout=3600,
+                arch=self.config.arch,
+                suite=self.config.suite,
+                root=self.config.target_root,
+                mirror=self.config.mirror,
+            )
         Logger.info("Base system installed")
 
+    def _bootstrap_tarball(self) -> None:
+        tarball = Path(tempfile.gettempdir()) / f"freedomnas-{self.config.target_os}-rootfs.tar"
+        Logger.info(f"Fetching rootfs tarball: {self.config.rootfs_url}")
+        self.ctx.stage_run(
+            "bootstrap", "fetch_tarball",
+            timeout=3600,
+            url=self.config.rootfs_url,
+            output=str(tarball),
+        )
+        Logger.info("Unpacking rootfs tarball...")
+        self.ctx.stage_run(
+            "bootstrap", "unpack_tarball",
+            timeout=3600,
+            tarball=str(tarball),
+            root=self.config.target_root,
+        )
+        if not self.ctx.dry_run:
+            tarball.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # Configuration and chroot
+    # ------------------------------------------------------------------
+
     def configure_system(self) -> None:
-        """Write hostname, /etc/hosts, fstab, timezone, and sources.list."""
-        Logger.info("Configuring base system...")
-        self._write_hostname()
-        self._write_hosts()
-        self._write_fstab()
-        self._write_sources_list()
-        self._write_timezone()
-        Logger.info("Base system configured")
-
-    def setup_chroot(self) -> None:
-        """Bind-mount /dev, /dev/pts, /proc, /sys, /run into /mnt."""
-        Logger.info("Setting up chroot environment...")
-        mounts = [
-            ("/dev",     "/mnt/dev"),
-            ("/dev/pts", "/mnt/dev/pts"),
-            ("/proc",    "/mnt/proc"),
-            ("/sys",     "/mnt/sys"),
-            ("/run",     "/mnt/run"),
-        ]
-        for src, dst in mounts:
-            os.makedirs(dst, exist_ok=True)
-            run_command(["mount", "--bind", src, dst])
-        # Copy resolv.conf for DNS access inside chroot
-        run_command(["cp", "/etc/resolv.conf", "/mnt/etc/resolv.conf"])
-        Logger.info("Chroot ready")
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _ensure_debootstrap(self) -> None:
-        """Install debootstrap if not present."""
-        r = run_command(["which", "debootstrap"], check=False)
-        if r.returncode != 0:
-            Logger.info("debootstrap not found — installing...")
-            run_command(["apt-get", "update", "-qq"])
-            run_command(["apt-get", "install", "-y", "debootstrap"])
-
-    def _write_hostname(self) -> None:
-        write_file("/mnt/etc/hostname", f"{self.config.hostname}\n")
-
-    def _write_hosts(self) -> None:
+        """Write the target's OS-specific configuration files from the profile."""
+        Logger.info("Writing base configuration...")
         fqdn = (
             f"{self.config.hostname}.{self.config.domain}"
-            if self.config.domain
-            else self.config.hostname
+            if self.config.domain else self.config.hostname
         )
-        content = (
-            f"127.0.0.1  localhost\n"
-            f"127.0.1.1  {fqdn} {self.config.hostname}\n\n"
-            "::1        localhost ip6-localhost ip6-loopback\n"
-            "ff02::1    ip6-allnodes\n"
-            "ff02::2    ip6-allrouters\n"
-        )
-        write_file("/mnt/etc/hosts", content)
+        variables = {
+            "hostname": self.config.hostname,
+            "fqdn": fqdn,
+            "domain": self.config.domain,
+            "timezone": self.config.timezone,
+            "mirror": self.config.mirror,
+            "suite": self.config.suite,
+            "arch": self.config.arch,
+            "esp_device": self.config.part1 or "",
+            "esp_spec": self._esp_fstab_spec(),
+            "pool_name": self.config.pool_name,
+            "edition": self.config.target_os,
+        }
 
-    def _write_fstab(self) -> None:
-        # The ESP is used in both boot modes now (efibootmgr reads the UKI
-        # from it directly on UEFI; Clover's boot7/CLOVERX64.efi and the
-        # UKI both live on it on BIOS), so it's always mounted at /boot/efi.
-        efi_line = f"{self.config.part1}  /boot/efi  vfat  defaults  0  2\n"
-        content = (
-            "# /etc/fstab — ZFS datasets are mounted by ZFS, not fstab\n"
-            f"{efi_line}"
-        )
-        write_file("/mnt/etc/fstab", content)
+        # Every file the edition declares, except the ones another step owns.
+        for name in sorted(self.ctx.target.profile.get("files", {})):
+            if name in _FILES_OWNED_ELSEWHERE:
+                continue
+            self.ctx.write_target_file(name, **variables)
 
-    def _write_sources_list(self) -> None:
-        content = (
-            f"deb {self.config.debian_mirror} trixie main contrib non-free non-free-firmware\n"
-            f"deb {self.config.debian_mirror} trixie-updates main contrib non-free non-free-firmware\n"
-            "deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware\n"
-        )
-        write_file("/mnt/etc/apt/sources.list", content)
+        Logger.info("Base configuration written")
 
-    def _write_timezone(self) -> None:
-        write_file("/mnt/etc/timezone", f"{self.config.timezone}\n")
-        run_in_chroot([
-            "ln", "-sf",
-            f"/usr/share/zoneinfo/{self.config.timezone}",
-            "/etc/localtime",
-        ], check=False)
+    def _esp_fstab_spec(self) -> str:
+        """
+        Mount the ESP by UUID when the platform can report one — a NAS grows
+        disks, and /dev/sdX is not a stable name across reboots.
+        """
+        if not self.config.part1:
+            return ""
+        if not self.ctx.has("partitioning", "esp_uuid", target=False):
+            return self.config.part1
+        try:
+            uuid, _ = self.ctx.host_run(
+                "partitioning", "esp_uuid", check=False, timeout=30, device=self.config.part1
+            )
+        except Exception:
+            uuid = ""
+        uuid = uuid.strip()
+        return f"UUID={uuid}" if uuid else self.config.part1
+
+    def setup_chroot(self) -> None:
+        """Create the pseudo-filesystem mountpoints and bind-mount them."""
+        Logger.info("Preparing chroot environment...")
+        for directory in self.ctx.meta("chroot_dirs", []) or []:
+            self.ctx.ensure_target_dir(directory)
+
+        self.ctx.host_run("chroot", "mount", root=self.config.target_root)
+        self._copy_resolv_conf()
+        Logger.info("Chroot ready")
+
+    def teardown_chroot(self) -> None:
+        self.ctx.host_run("chroot", "unmount", check=False, root=self.config.target_root)
+
+    def _copy_resolv_conf(self) -> None:
+        """
+        Give the chroot working DNS. Plain file I/O — /etc/resolv.conf is a
+        POSIX-wide convention, not an OS command.
+        """
+        source = Path("/etc/resolv.conf")
+        if not source.exists() or self.ctx.dry_run:
+            return
+        dest = self.ctx.target_path("/etc/resolv.conf")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.is_symlink():
+            dest.unlink()
+        shutil.copy2(source, dest)

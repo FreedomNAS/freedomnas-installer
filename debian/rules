@@ -6,10 +6,7 @@
 override_dh_install:
 	dh_install
 	mkdir -p debian/freedomnas-installer/usr/lib/freedomnas/installer/lib
-	mkdir -p debian/freedomnas-installer/usr/lib/freedomnas/installer/assets
 	install -m 755 setup.py debian/freedomnas-installer/usr/lib/freedomnas/installer/setup.py
 	install -m 644 lib/*.py debian/freedomnas-installer/usr/lib/freedomnas/installer/lib/
-	cp -r assets/. debian/freedomnas-installer/usr/lib/freedomnas/installer/assets/
-	chmod +x debian/freedomnas-installer/usr/lib/freedomnas/installer/assets/zz-dracut-uki
 	mkdir -p debian/freedomnas-installer/usr/bin
 	ln -sf /usr/lib/freedomnas/installer/setup.py debian/freedomnas-installer/usr/bin/freedomnas-install

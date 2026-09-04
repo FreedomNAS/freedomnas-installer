@@ -1,83 +1,55 @@
 """
-FreedomNAS Installer — User creation and password prompts.
+FreedomNAS Installer — user creation.
 
-Steps: get_admin_password (step 12), prompt_additional_users (step 13).
-Both steps run BEFORE install_packages so the users exist when packages
-set up PAM/Samba authentication.
+Users are created before packages are installed, so PAM/Samba
+authentication is already in place when those services first start.
 
-All password handling uses execute_with_stdin (via engine) to avoid
-exposing passwords in command strings — spec §13.2.
+Accounts are created through the target engine, which means `useradd` on a
+Linux target and `pw useradd` on FreeBSD without this module knowing the
+difference. Passwords are piped to stdin (`users.set_password_stdin`,
+payload shaped by `users.password_stdin_format`) so they never appear in
+argv, in ps output, or in the installer log.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List
 
-from installer_modules import Logger, DialogManager, Configuration, run_in_chroot
+from context import ExecutionContext
+from installer_modules import Logger, DialogManager, Configuration
+
+_MIN_PASSWORD_LENGTH = 8
 
 
 class UsersInstaller:
-    """Prompts for user credentials and creates OS accounts inside the chroot."""
+    """Prompts for credentials and creates the accounts in the target system."""
 
-    def __init__(self, logger: Logger, dialog: DialogManager, config: Configuration) -> None:
-        self.logger = logger
+    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
         self.dialog = dialog
         self.config = config
+        self.ctx = ctx
 
     # ------------------------------------------------------------------
-    # Public steps
+    # Prompts
     # ------------------------------------------------------------------
 
-    def get_admin_password(self) -> None:
-        """
-        Double-prompt for the admin user password (spec §8.3 step 12).
-        Loops until the two entries match.
-        """
-        while True:
-            pwd1 = self.dialog.passwordbox(
-                "Admin Password",
-                f"Set password for user '{self.config.username}':",
-                height=10,
-                width=60,
-            )
-            if not pwd1:
-                self.dialog.msgbox(
-                    "Password Required",
-                    "A password is required for the admin account.\n"
-                    "Please try again.",
-                )
-                continue
+    def prompt_admin_user(self) -> None:
+        """Ask for the admin account name, then its password (twice)."""
+        username = self.dialog.inputbox(
+            "Administrator Account",
+            "Enter the name of the FreedomNAS administrator account:",
+            init_text=self.config.username,
+            height=10,
+            width=60,
+        )
+        if username and username.strip():
+            self.config.username = username.strip()
 
-            pwd2 = self.dialog.passwordbox(
-                "Confirm Password",
-                f"Confirm password for '{self.config.username}':",
-                height=10,
-                width=60,
-            )
-
-            if pwd1 != pwd2:
-                self.dialog.msgbox(
-                    "Password Mismatch",
-                    "The passwords do not match. Please try again.",
-                )
-                continue
-
-            if len(pwd1) < 8:
-                self.dialog.msgbox(
-                    "Password Too Short",
-                    "The password must be at least 8 characters long.",
-                )
-                continue
-
-            self.config.user_password = pwd1
-            Logger.info(f"Admin password set for: {self.config.username}")
-            return
+        self.config.user_password = self._prompt_password(self.config.username)
+        Logger.info(f"Admin account: {self.config.username}")
 
     def prompt_additional_users(self) -> None:
-        """
-        Optionally add extra OS users (spec §8.3 step 13).
-        Loops until the user declines to add another.
-        """
+        """Optionally queue extra accounts."""
         while self.dialog.yesno(
             "Additional Users",
             "Do you want to add another user?",
@@ -95,69 +67,73 @@ class UsersInstaller:
             username = username.strip()
 
             wants_sudo = self.dialog.yesno(
-                "Sudo Access",
-                f"Grant sudo (wheel group) access to '{username}'?",
+                "Administrative Access",
+                f"Grant administrative (sudo) access to '{username}'?",
                 height=8,
                 width=55,
             )
 
-            while True:
-                pwd1 = self.dialog.passwordbox(
-                    "User Password",
-                    f"Password for '{username}':",
-                    height=10,
-                    width=60,
-                )
-                if not pwd1:
-                    self.dialog.msgbox("Password Required", "A password is required.")
-                    continue
-                pwd2 = self.dialog.passwordbox(
-                    "Confirm Password",
-                    f"Confirm password for '{username}':",
-                    height=10,
-                    width=60,
-                )
-                if pwd1 != pwd2:
-                    self.dialog.msgbox("Password Mismatch", "Passwords do not match.")
-                    continue
-                break
-
             self.config.additional_users.append({
                 "username": username,
-                "password": pwd1,
+                "password": self._prompt_password(username),
                 "sudo": wants_sudo,
             })
             Logger.info(f"Additional user queued: {username}")
 
-    def create_users_in_chroot(self) -> None:
-        """
-        Create all users inside the installed chroot.
-        Called after install_base_system (packages must provide useradd/chpasswd).
-        """
+    def _prompt_password(self, username: str) -> str:
+        while True:
+            first = self.dialog.passwordbox(
+                "Password", f"Set password for '{username}':", height=10, width=60
+            )
+            if not first:
+                self.dialog.msgbox("Password Required", "A password is required.")
+                continue
+
+            second = self.dialog.passwordbox(
+                "Confirm Password", f"Confirm password for '{username}':", height=10, width=60
+            )
+            if first != second:
+                self.dialog.msgbox("Password Mismatch", "The passwords do not match.")
+                continue
+
+            if len(first) < _MIN_PASSWORD_LENGTH:
+                self.dialog.msgbox(
+                    "Password Too Short",
+                    f"The password must be at least {_MIN_PASSWORD_LENGTH} characters long.",
+                )
+                continue
+
+            return first
+
+    # ------------------------------------------------------------------
+    # Creation
+    # ------------------------------------------------------------------
+
+    def create_users(self) -> None:
+        """Create the admin account and any additional accounts in the target."""
+        sudo_group = self.ctx.target.get_profile_value("users", "sudo_group")
+
         self._create_user(
-            self.config.username,
-            self.config.user_password or "",
-            groups=["sudo", "samba"],
+            self.config.username, self.config.user_password or "", groups=[sudo_group]
         )
         for user in self.config.additional_users:
-            groups = ["sudo"] if user.get("sudo") else []
+            groups = [sudo_group] if user.get("sudo") else []
             self._create_user(user["username"], user["password"], groups=groups)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _create_user(self, username: str, password: str, groups: list) -> None:
+    def _create_user(self, username: str, password: str, groups: List[str]) -> None:
         Logger.info(f"Creating user: {username}")
-        run_in_chroot(["useradd", "-m", "-s", "/bin/bash", username])
-        for group in groups:
-            run_in_chroot(["usermod", "-aG", group, username], check=False)
-        # Set password via chpasswd — password never appears in argv
-        import subprocess
-        subprocess.run(
-            ["chroot", "/mnt", "chpasswd"],
-            input=f"{username}:{password}\n",
-            text=True,
-            check=True,
+
+        if groups:
+            self.ctx.target_run(
+                "users", "create", username=username, groups=",".join(groups)
+            )
+        else:
+            self.ctx.target_run("users", "create_basic", username=username)
+
+        payload = self.ctx.target.get_profile_value("users", "password_stdin_format")
+        self.ctx.target_run_stdin(
+            "users", "set_password_stdin",
+            payload.format(username=username, password=password),
+            username=username,
         )
         Logger.info(f"User created: {username}")

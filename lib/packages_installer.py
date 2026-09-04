@@ -1,129 +1,134 @@
 """
-FreedomNAS Installer — Package installation and first-boot service.
+FreedomNAS Installer — package selection and installation.
 
-Steps: install_packages (step 14), create_firstboot_service (step 17).
+The package set is not a Python list any more: it comes from
+freedomnas-profiles/packages/ through freedomnas-core's PackageManager, the
+same source the WebUI and the reconciler read. The installer only decides
+*which categories* to install; the profile decides what that means on each
+edition.
 
-The first-boot service is a cron @reboot entry that starts the WebUI
-supervisor wrapper — init-system-agnostic per spec §9.2.
+Categories marked required in MANIFEST.json are always installed; the rest
+are offered as a checklist and recorded in config.yaml so a later disaster
+recovery reinstalls exactly the same set.
 """
 
 from __future__ import annotations
 
-from installer_modules import (
-    Logger, DialogManager, Configuration,
-    run_command, run_in_chroot, write_file,
-)
+from typing import Dict, List
 
-
-# Core packages required on every FreedomNAS Debian install
-_BASE_PACKAGES = [
-    "linux-image-amd64",
-    "linux-headers-amd64",
-    "zfsutils-linux",
-    "zfs-dracut",             # dracut module providing ZFS root support in the UKI
-    "zfs-zed",
-    "dracut",
-    "efibootmgr",
-    "dosfstools",            # mkfs.vfat for EFI
-    "python3",
-    "python3-pip",
-    "python3-fastapi",
-    "python3-uvicorn",
-    "python3-yaml",
-    "python3-pam",
-    "samba",
-    "nfs-kernel-server",
-    "topgrade",
-    "curl",
-    "sudo",
-    "locales",
-]
+import corelink
+from context import ExecutionContext
+from installer_modules import Logger, DialogManager, Configuration
 
 
 class PackagesInstaller:
-    """Installs required packages inside the chroot and sets up the first-boot service."""
+    """Selects package categories and installs them into the target."""
 
-    def __init__(self, logger: Logger, dialog: DialogManager, config: Configuration) -> None:
-        self.logger = logger
+    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
         self.dialog = dialog
         self.config = config
-
-    # ------------------------------------------------------------------
-    # Public steps
-    # ------------------------------------------------------------------
-
-    def install_packages(self) -> None:
-        """Install core packages inside the chroot (step 14)."""
-        Logger.info("Updating package cache inside chroot...")
-        run_in_chroot(["apt-get", "update", "-qq"])
-
-        Logger.info(f"Installing {len(_BASE_PACKAGES)} packages...")
-        run_in_chroot(
-            ["apt-get", "install", "-y", "--no-install-recommends"] + _BASE_PACKAGES,
-            timeout=1800,
+        self.ctx = ctx
+        pm_module = corelink.package_manager_module()
+        self.packages = pm_module.PackageManager(
+            packages_dir=str(corelink.find_profiles_dir() / "packages")
         )
 
-        # Install freedomnas-core Python package if available on the mirror
-        self._install_freedomnas_core()
-        Logger.info("Packages installed successfully")
-
-    def create_firstboot_service(self) -> None:
-        """
-        Create a cron @reboot entry that starts the WebUI supervisor wrapper.
-        This is the init-agnostic approach defined in spec §9.2.
-        """
-        Logger.info("Creating first-boot service (cron @reboot)...")
-
-        supervisor = "/usr/lib/freedomnas/webui/bin/supervisor.sh"
-        cron_entry = f"@reboot root {supervisor} >> /var/log/freedomnas-webui.log 2>&1\n"
-        write_file("/mnt/etc/cron.d/freedomnas-webui", cron_entry, mode=0o644)
-
-        # Write the supervisor wrapper script (spec §9.2: circuit breaker after 5 failures)
-        supervisor_script = (
-            "#!/bin/sh\n"
-            "# FreedomNAS WebUI supervisor — init-agnostic (spec §9.2)\n"
-            "FAILURES=0\n"
-            "MAX_FAILURES=5\n"
-            "WEBUI_CMD=\"python3 -m uvicorn freedomnas_webui.api.main:app "
-            "--host 0.0.0.0 --port 8080\"\n\n"
-            "while true; do\n"
-            "    $WEBUI_CMD\n"
-            "    EXIT=$?\n"
-            "    if [ $EXIT -ne 0 ]; then\n"
-            "        FAILURES=$((FAILURES + 1))\n"
-            "        echo \"[$(date)] WebUI exited with code $EXIT "
-            "(failure $FAILURES/$MAX_FAILURES)\"\n"
-            "        if [ $FAILURES -ge $MAX_FAILURES ]; then\n"
-            "            echo \"[$(date)] Circuit breaker OPEN — stopping supervisor\"\n"
-            "            exit 1\n"
-            "        fi\n"
-            "        sleep 5\n"
-            "    else\n"
-            "        FAILURES=0\n"
-            "    fi\n"
-            "done\n"
-        )
-        write_file(
-            "/mnt/usr/lib/freedomnas/webui/bin/supervisor.sh",
-            supervisor_script,
-            mode=0o755,
-        )
-        Logger.info("First-boot service created")
-
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Selection
     # ------------------------------------------------------------------
 
-    def _install_freedomnas_core(self) -> None:
-        """
-        Install freedomnas-core from PyPI or the local .deb if available.
-        Non-fatal: if not available, the user installs it separately.
-        """
-        result = run_in_chroot(
-            ["pip3", "install", "--quiet", "freedomnas-core"],
-            check=False,
+    def select_categories(self) -> None:
+        """Required categories are implicit; optional ones are a checklist."""
+        required = self.packages.get_required_categories()
+        optional = [
+            c for c in self.packages.get_categories()
+            if not c.get("required", False)
+        ]
+
+        items = [
+            (c["id"], f"{c['name']} — {c['description'][:44]}", c["id"] in ("samba-cifs", "nfs"))
+            for c in optional
+        ]
+        chosen = self.dialog.checklist(
+            "Optional Features",
+            "Select the features to install.\n"
+            "(Required core packages are always installed.)",
+            items,
+            height=18,
+            width=76,
+            list_height=8,
         )
-        if result.returncode == 0:
-            Logger.info("freedomnas-core installed via pip")
+        if chosen is None:
+            chosen = []
+
+        self.config.package_categories = required + [
+            c for c in chosen if self.packages.validate_category(c)
+        ]
+        Logger.info(f"Package categories: {', '.join(self.config.package_categories)}")
+
+    def use_default_categories(self) -> None:
+        """Non-interactive fallback: required categories only."""
+        self.config.package_categories = self.packages.get_required_categories()
+
+    # ------------------------------------------------------------------
+    # Installation
+    # ------------------------------------------------------------------
+
+    def package_list(self) -> List[str]:
+        """Flatten the selected categories into one deduplicated list."""
+        edition = self.config.target_os
+        seen: List[str] = []
+        for category in self.config.package_categories:
+            for package in self.packages.get_packages_for_os(category, edition):
+                if package not in seen:
+                    seen.append(package)
+        return seen
+
+    def install_packages(self, fresh_root: bool) -> None:
+        """
+        Install the selected packages into the target.
+
+        fresh_root=True uses `bootstrap.install_base` (the recommends-free
+        variant a freshly bootstrapped root wants); in-place installs go
+        through the ordinary `packages.install`, which is idempotent and
+        therefore only pulls in what is actually missing.
+        """
+        packages = self.package_list()
+        if not packages:
+            Logger.warn("No packages selected — skipping package installation")
+            return
+
+        Logger.info(f"Updating package cache ({self.config.target_os})...")
+        if fresh_root and self.ctx.has("bootstrap", "update_cache"):
+            self.ctx.target_run("bootstrap", "update_cache", timeout=600, check=False)
         else:
-            Logger.warn("freedomnas-core not available via pip — install manually")
+            self.ctx.target_run("packages", "update_cache", timeout=600, check=False)
+
+        Logger.info(f"Installing {len(packages)} packages...")
+        if fresh_root and self.ctx.has("bootstrap", "install_base"):
+            self.ctx.target_run(
+                "bootstrap", "install_base", timeout=3600, package_list=" ".join(packages)
+            )
+        else:
+            self.ctx.target_run(
+                "packages", "install", timeout=3600, package_name=" ".join(packages)
+            )
+        Logger.info("Packages installed")
+
+    def enable_services(self) -> None:
+        """
+        Enable each selected category's services through the init profile, so
+        this works the same on systemd, OpenRC, runit, s6, dinit and bsd_rc.
+        """
+        edition = self.config.target_os
+        for category in self.config.package_categories:
+            for service in self.packages.get_services_for_os(category, edition):
+                Logger.info(f"Enabling service: {service}")
+                self.ctx.target_run(
+                    "services", "enable", check=False, service_name=service
+                )
+
+    def locale_setup(self) -> None:
+        """Generate locales where the edition needs an explicit step."""
+        if self.ctx.has("bootstrap", "locale_gen"):
+            self.ctx.target_run("bootstrap", "locale_gen", check=False, timeout=300)

@@ -1,234 +1,245 @@
 """
-FreedomNAS Installer — Boot chain installation.
+FreedomNAS Installer — boot chain.
 
-Steps: install_bootloader (step 15).
+Which boot chain gets installed is decided by what the target profile
+declares, not by an `if edition ==` in Python:
 
-Every machine gets a single dracut-built Unified Kernel Image (UKI) —
-kernel + initramfs + cmdline bundled into one PE binary — written to the
-EFI System Partition. How it gets loaded then splits by firmware:
+  bootloader.build_uki        → Linux: one dracut-built Unified Kernel Image
+                                (kernel + initramfs + cmdline in a single PE
+                                binary) on the ESP, plus the zz-dracut-uki
+                                hook so future kernel updates rebuild it
+  bootloader.install_efi_loader → FreeBSD: the native loader, which reads
+                                ZFS directly and needs no UKI at all
 
-  UEFI  — registered directly via efibootmgr. No third-party bootloader.
-  BIOS  — Clover (legacy-BIOS-to-UEFI-emulation, boot7/BiosBlockIO DUET
-          variant) bridges BIOS -> UEFI emulation -> UKI. Validated on
-          real hardware; see assets/clover/README.md for provenance and
-          why the vendored release must not be bumped without re-validating.
+On top of that, firmware decides how the ESP gets entered:
 
-The two OS commands this needs (dracut, efibootmgr) are resolved through
-freedomnas.engine.get_command() against freedomnas-profiles/debian.json's
-"bootloader" category — never hardcoded here (Golden Rule) — then executed
-via this module's own run_in_chroot(), since engine.execute() has no
-chroot concept.
+  UEFI  — `bootloader.efi_boot_entry` (efibootmgr) registers the loader in
+          NVRAM
+  BIOS  — the vendored, hardware-validated Clover chain (boot0/boot1/boot7)
+          bridges legacy BIOS into UEFI emulation. This is pure byte I/O on
+          the MBR and the ESP's boot sector, so it has no profile entry —
+          same precedent as writing /etc/fstab.
 
-Deploying the Clover binaries themselves (boot0/boot1 boot sectors, the
-CLOVERX64.efi/BOOTX64.efi payload, config.plist) is pure file I/O, not a
-shell command, so it needs no profile entry — same precedent as
-write_file() for GRUB's own config previously.
-
-PARKED: the Clover binaries and zz-dracut-uki now live in
-freedomnas-profiles/assets/ — moved there so freedomnas-image-builder can
-share the same vendored copy instead of a second one drifting out of sync.
-Resolved via the same sibling-repo search order used elsewhere for profile
-JSON (see freedomnas-core/engine.py's PROFILE_SEARCH_PATHS).
+The Clover binaries and zz-dracut-uki live in freedomnas-profiles/assets/,
+shared with freedomnas-image-builder rather than vendored twice. Do not bump
+the Clover release without re-validating on hardware (see its README).
 """
 
 from __future__ import annotations
 
-import os
-import shlex
 import shutil
 from pathlib import Path
+import corelink
+from context import ExecutionContext
+from installer_modules import Logger, DialogManager, Configuration, write_file
 
-from installer_modules import (
-    Logger, DialogManager, Configuration,
-    run_command, run_in_chroot, write_file,
-)
-
-_LIB_DIR = Path(__file__).parent
-
-
-def _find_assets_dir() -> Path:
-    """
-    Resolve freedomnas-profiles/assets/ via the same sibling-repo search
-    order engine.py uses for profile JSON — assets moved there so the
-    (parked) installer and freedomnas-image-builder share one vendored copy.
-    """
-    candidates = [
-        Path("/usr/lib/freedomnas/profiles/assets"),         # system install
-        _LIB_DIR.parent.parent / "freedomnas-profiles" / "assets",  # dev sibling repo
-        _LIB_DIR.parent / "os_profiles" / "assets",           # dev local
-        Path("/opt/freedomnas/lib/os_profiles/assets"),       # alternative
-    ]
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate
-    raise RuntimeError(
-        "Could not locate freedomnas-profiles/assets/ (Clover + zz-dracut-uki). "
-        f"Checked: {', '.join(str(c) for c in candidates)}"
-    )
-
-
-_ASSETS_DIR = _find_assets_dir()
-_CLOVER_DIR = _ASSETS_DIR / "clover"
-_ZZ_DRACUT_UKI = _ASSETS_DIR / "zz-dracut-uki"
-
-_ROOT_DATASET = "rpool/ROOT/debian"
-
-# Host-side mountpoint of the ESP during install (also relied on by
-# setup.py's cleanup, which unmounts this same path).
-_ESP_MOUNT = "/mnt/boot/efi"
-
-# Chroot-relative paths (as dracut/efibootmgr see them once inside /mnt).
-_UKI_CHROOT_PATH = "/boot/efi/EFI/Linux/debian-uki.efi"
-_UKI_UEFI_LOADER_PATH = "/EFI/Linux/debian-uki.efi"
+_ESP_IN_TARGET = "/boot/efi"
+_UKI_DIR = "/EFI/Linux"
 
 
 class BootloaderInstaller:
-    """Builds the UKI and installs the appropriate boot chain (efibootmgr or Clover)."""
+    """Builds the boot chain for the target edition and the detected firmware."""
 
-    def __init__(self, logger: Logger, dialog: DialogManager, config: Configuration) -> None:
-        self.logger = logger
+    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
         self.dialog = dialog
         self.config = config
+        self.ctx = ctx
+        self.assets = corelink.find_assets_dir()
 
     # ------------------------------------------------------------------
     # Public steps
     # ------------------------------------------------------------------
 
     def install_bootloader(self) -> None:
-        """Build the UKI and wire up the boot chain for the detected firmware."""
-        Logger.info(f"Installing boot chain ({self.config.boot_mode} mode)...")
+        Logger.info(f"Installing boot chain ({self.config.boot_mode})...")
+        self.mount_esp()
 
-        self._mount_esp()
-        self._build_uki()
-        self._deploy_kernel_hook()
+        if self.ctx.has("bootloader", "build_uki"):
+            self._build_uki()
+            self._deploy_kernel_hook()
+            loader_path = f"{_UKI_DIR}/{self.ctx.meta('uki_name', 'freedomnas-uki.efi')}"
+        else:
+            self._install_native_loader()
+            loader_path = "/EFI/BOOT/BOOTX64.efi"
 
         if self.config.boot_mode == "UEFI":
-            self._register_efi_boot_entry()
+            self._register_efi_boot_entry(loader_path)
         else:
-            self._deploy_clover()
+            self._deploy_bios_chain()
 
         Logger.info("Boot chain installed")
 
-    # ------------------------------------------------------------------
-    # UKI build (both boot modes)
-    # ------------------------------------------------------------------
-
-    def _mount_esp(self) -> None:
-        run_command(["mkdir", "-p", f"{_ESP_MOUNT}/EFI/Linux"])
+    def mount_esp(self) -> None:
+        self.ctx.ensure_target_dir(f"{_ESP_IN_TARGET}{_UKI_DIR}")
         if self.config.part1:
-            run_command(["mount", self.config.part1, _ESP_MOUNT])
+            self.ctx.host_run(
+                "partitioning", "mount_esp",
+                device=self.config.part1,
+                mountpoint=str(self.ctx.target_path(_ESP_IN_TARGET)),
+            )
+
+    def unmount_esp(self) -> None:
+        self.ctx.host_run(
+            "partitioning", "unmount", check=False,
+            mountpoint=str(self.ctx.target_path(_ESP_IN_TARGET)),
+        )
+
+    # ------------------------------------------------------------------
+    # Linux — UKI
+    # ------------------------------------------------------------------
 
     def _detect_kernel_version(self) -> str:
-        """Read the installed kernel version from the chroot's /lib/modules."""
-        modules_dir = Path("/mnt/lib/modules")
+        modules_dir = self.ctx.target_path("/lib/modules")
         versions = sorted(p.name for p in modules_dir.iterdir()) if modules_dir.is_dir() else []
         if not versions:
+            if self.ctx.dry_run:
+                return "0.0.0-dry-run"
             raise RuntimeError(
-                "No kernel found under /mnt/lib/modules — was linux-image-amd64 installed?"
+                f"No kernel found under {modules_dir} — was the kernel package installed?"
             )
         return versions[-1]
 
     def _build_uki(self) -> None:
-        from freedomnas.engine import get_engine
-
         kernel_version = self._detect_kernel_version()
-        engine = get_engine()
-        cmd = engine.get_command(
+        uki_name = self.ctx.meta("uki_name", "freedomnas-uki.efi")
+        Logger.info(f"Building UKI for kernel {kernel_version}...")
+        self.ctx.target_run(
             "bootloader", "build_uki",
-            dataset=_ROOT_DATASET,
-            output_path=_UKI_CHROOT_PATH,
+            timeout=900,
+            dataset=self.config.root_dataset,
+            output_path=f"{_ESP_IN_TARGET}{_UKI_DIR}/{uki_name}",
             kernel_version=kernel_version,
         )
-        Logger.info(f"Building UKI for kernel {kernel_version}...")
-        run_in_chroot(shlex.split(cmd))
+
+        if self.ctx.has("bootloader", "build_uki_recovery"):
+            recovery_name = self.ctx.meta("uki_recovery_name", "")
+            if recovery_name:
+                Logger.info("Building recovery UKI (read-only, single user)...")
+                self.ctx.target_run(
+                    "bootloader", "build_uki_recovery",
+                    timeout=900, check=False,
+                    dataset=self.config.root_dataset,
+                    output_path=f"{_ESP_IN_TARGET}{_UKI_DIR}/{recovery_name}",
+                    kernel_version=kernel_version,
+                )
 
     def _deploy_kernel_hook(self) -> None:
-        """Deploy zz-dracut-uki so future kernel updates rebuild the UKI automatically."""
-        dest = Path("/mnt/etc/kernel/postinst.d/zz-dracut-uki")
+        """Rebuild the UKI automatically on every future kernel update."""
+        source = self.assets / "zz-dracut-uki"
+        if not source.is_file():
+            Logger.warn(f"Kernel hook not found at {source} — skipping")
+            return
+        dest = self.ctx.target_path("/etc/kernel/postinst.d/zz-dracut-uki")
+        Logger.command(f"[file] {dest}")
+        if self.ctx.dry_run:
+            return
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(_ZZ_DRACUT_UKI, dest)
-        os.chmod(dest, 0o755)
+        shutil.copy2(source, dest)
+        dest.chmod(0o755)
 
     # ------------------------------------------------------------------
-    # UEFI boot chain — efibootmgr only
+    # FreeBSD — native loader
     # ------------------------------------------------------------------
 
-    def _register_efi_boot_entry(self) -> None:
-        from freedomnas.engine import get_engine
+    def _install_native_loader(self) -> None:
+        """Editions whose loader reads ZFS directly need no UKI."""
+        self.ctx.ensure_target_dir(f"{_ESP_IN_TARGET}/EFI/BOOT")
+        if self.ctx.has("bootloader", "install_efi_loader"):
+            self.ctx.target_run("bootloader", "install_efi_loader", esp_mount=_ESP_IN_TARGET)
+        if self.ctx.has("bootloader", "install_gptzfsboot") and self.config.boot_mode == "BIOS":
+            self.ctx.target_run(
+                "bootloader", "install_gptzfsboot",
+                part_num=2, disk=self.config.disk,
+            )
 
-        engine = get_engine()
-        cmd = engine.get_command(
+    # ------------------------------------------------------------------
+    # Firmware entry points
+    # ------------------------------------------------------------------
+
+    def _register_efi_boot_entry(self, loader_path: str) -> None:
+        if not self.ctx.has("bootloader", "efi_boot_entry"):
+            Logger.warn("Profile declares no efi_boot_entry — relying on the ESP fallback path")
+            return
+        Logger.info("Registering UEFI boot entry...")
+        self.ctx.target_run(
             "bootloader", "efi_boot_entry",
+            check=False,
             disk=self.config.disk,
             part_num=1,
-            loader_path=_UKI_UEFI_LOADER_PATH,
+            loader_path=loader_path,
             label="FreedomNAS",
         )
-        Logger.info("Registering UEFI boot entry via efibootmgr...")
-        run_in_chroot(shlex.split(cmd))
 
-    # ------------------------------------------------------------------
-    # BIOS boot chain — Clover (boot0/boot1/boot7 + CLOVERX64.efi)
-    # ------------------------------------------------------------------
+    def _deploy_bios_chain(self) -> None:
+        """
+        BIOS machines: deploy the validated Clover chain. Only meaningful for
+        editions that boot through a UKI — an edition with a native
+        BIOS-capable loader installs it in _install_native_loader() instead.
+        """
+        if not self.ctx.has("bootloader", "build_uki"):
+            Logger.info("Native BIOS loader already installed — no Clover needed")
+            return
 
-    def _deploy_clover(self) -> None:
-        """
-        Deploy the validated Clover boot chain onto the disk and ESP.
-        Pure file I/O — no shell commands, no profile entry needed.
-        """
+        clover_dir = self.assets / "clover"
+        if not clover_dir.is_dir():
+            raise RuntimeError(f"Clover assets not found at {clover_dir}")
+
         Logger.info("Deploying Clover boot chain (BIOS mode)...")
-        self._write_boot0()
-        self._write_boot1()
-        self._copy_clover_payload()
+        if self.ctx.dry_run:
+            Logger.command(f"[file] boot0 -> {self.config.disk}, boot1 -> {self.config.part1}")
+            return
+
+        self._write_boot0(clover_dir)
+        self._write_boot1(clover_dir)
+        self._copy_clover_payload(clover_dir)
         self._write_clover_config()
         Logger.info("Clover boot chain deployed")
 
-    def _write_boot0(self) -> None:
+    def _write_boot0(self, clover_dir: Path) -> None:
         """
         Write boot0's first 440 bytes to the MBR — the bootstrap code area
-        only, preserving the disk's existing signature, reserved bytes,
-        partition table, and boot signature (bytes 440-511).
+        only, preserving the disk signature, partition table and boot
+        signature at bytes 440-511.
         """
         if not self.config.disk:
             raise RuntimeError("config.disk not set")
-        boot0_data = (_CLOVER_DIR / "boot0ss").read_bytes()
+        payload = (clover_dir / "boot0ss").read_bytes()
         with open(self.config.disk, "r+b") as disk:
-            disk.write(boot0_data[:440])
+            disk.write(payload[:440])
 
-    def _write_boot1(self) -> None:
+    def _write_boot1(self, clover_dir: Path) -> None:
         """
         Write boot1f32alt to the ESP's own boot sector, merging in the
-        original FAT32 BIOS Parameter Block (bytes 3-89) so the volume
-        stays correctly described after the boot code is replaced.
+        original FAT32 BIOS Parameter Block (bytes 3-89) so the volume stays
+        correctly described.
         """
         if not self.config.part1:
             raise RuntimeError("config.part1 not set")
-        boot1_data = bytearray((_CLOVER_DIR / "boot1f32alt").read_bytes())
+        payload = bytearray((clover_dir / "boot1f32alt").read_bytes())
         with open(self.config.part1, "r+b") as esp:
-            original_sector = esp.read(512)
-            boot1_data[3:90] = original_sector[3:90]
+            original = esp.read(512)
+            payload[3:90] = original[3:90]
             esp.seek(0)
-            esp.write(bytes(boot1_data))
+            esp.write(bytes(payload))
 
-    def _copy_clover_payload(self) -> None:
-        boot_dir = Path(_ESP_MOUNT) / "boot"
-        clover_dir = Path(_ESP_MOUNT) / "EFI" / "CLOVER"
-        bootx64_dir = Path(_ESP_MOUNT) / "EFI" / "BOOT"
-        for d in (boot_dir, clover_dir, bootx64_dir):
-            d.mkdir(parents=True, exist_ok=True)
-
-        shutil.copy2(_CLOVER_DIR / "boot7", boot_dir / "boot7")
-        shutil.copy2(_CLOVER_DIR / "CLOVERX64.efi", clover_dir / "CLOVERX64.efi")
-        shutil.copy2(_CLOVER_DIR / "BOOTX64.efi", bootx64_dir / "BOOTX64.efi")
+    def _copy_clover_payload(self, clover_dir: Path) -> None:
+        esp = self.ctx.target_path(_ESP_IN_TARGET)
+        for subdir in ("boot", "EFI/CLOVER", "EFI/BOOT"):
+            (esp / subdir).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(clover_dir / "boot7", esp / "boot" / "boot7")
+        shutil.copy2(clover_dir / "CLOVERX64.efi", esp / "EFI" / "CLOVER" / "CLOVERX64.efi")
+        shutil.copy2(clover_dir / "BOOTX64.efi", esp / "EFI" / "BOOT" / "BOOTX64.efi")
 
     def _write_clover_config(self) -> None:
         """
         config.plist validated on real hardware: DefaultVolume/DefaultLoader/
-        IgnoreNVRAMBoot (plus Scan->Entries=true) rather than relying solely
-        on Custom->Entries, to work around a real boot7 bug where a
-        Custom-only entry didn't reliably auto-load on boot.
+        IgnoreNVRAMBoot plus Scan->Entries=true, rather than relying solely on
+        Custom->Entries — a boot7 bug makes a Custom-only entry fail to
+        auto-load on some machines.
         """
-        content = """<?xml version="1.0" encoding="UTF-8"?>
+        uki_name = self.ctx.meta("uki_name", "freedomnas-uki.efi")
+        loader = f"\\EFI\\Linux\\{uki_name}"
+        content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -241,7 +252,7 @@ class BootloaderInstaller:
         <key>DefaultVolume</key>
         <string>EFI</string>
         <key>DefaultLoader</key>
-        <string>\\EFI\\Linux\\debian-uki.efi</string>
+        <string>{loader}</string>
         <key>IgnoreNVRAMBoot</key>
         <true/>
     </dict>
@@ -264,7 +275,7 @@ class BootloaderInstaller:
                     <key>Volume</key>
                     <string>EFI</string>
                     <key>Path</key>
-                    <string>\\EFI\\Linux\\debian-uki.efi</string>
+                    <string>{loader}</string>
                     <key>Type</key>
                     <string>Linux</string>
                     <key>Title</key>
@@ -278,4 +289,4 @@ class BootloaderInstaller:
 </dict>
 </plist>
 """
-        write_file(f"{_ESP_MOUNT}/EFI/CLOVER/config.plist", content)
+        write_file(str(self.ctx.target_path(f"{_ESP_IN_TARGET}/EFI/CLOVER/config.plist")), content)

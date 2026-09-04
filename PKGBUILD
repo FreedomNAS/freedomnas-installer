@@ -2,7 +2,7 @@
 pkgname=freedomnas-installer
 pkgver=4.0.0
 pkgrel=1
-pkgdesc="FreedomNAS ZFS-on-root installer"
+pkgdesc="Profile-driven FreedomNAS installer (clean install or in-place)"
 arch=('any')
 url="https://codeberg.org/freedomnas/freedomnas-installer"
 license=('MPL-2.0')
@@ -14,10 +14,11 @@ depends=(
     'gptfdisk'
     'dosfstools'
     'zfs-utils'
-    'debootstrap'
     'dracut'
     'efibootmgr'
+    'curl'
 )
+optdepends=('debootstrap: bootstrap a Debian target natively')
 source=("git+https://codeberg.org/freedomnas/freedomnas-installer.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 
@@ -29,10 +30,7 @@ package() {
     mkdir -p "${pkgdir}/usr/lib/freedomnas/installer/lib"
     install -Dm 644 lib/*.py "${pkgdir}/usr/lib/freedomnas/installer/lib/"
 
-    # assets/ contains vendored Clover binaries and the zz-dracut-uki hook
-    mkdir -p "${pkgdir}/usr/lib/freedomnas/installer/assets"
-    cp -r assets/. "${pkgdir}/usr/lib/freedomnas/installer/assets/"
-    chmod +x "${pkgdir}/usr/lib/freedomnas/installer/assets/zz-dracut-uki"
+    # Boot-chain assets (Clover, zz-dracut-uki) come from freedomnas-profiles
 
     # User-facing entry point
     mkdir -p "${pkgdir}/usr/bin"

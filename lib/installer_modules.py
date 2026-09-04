@@ -1,17 +1,21 @@
 """
 FreedomNAS Installer — Base infrastructure.
 
-Provides Logger, DialogManager, Configuration, and subprocess helpers
-used by all installer modules.
+Provides Logger, DialogManager, Configuration and pure-Python filesystem
+helpers used by all installer modules.
 
-All subprocess calls use shell=False. dialog output is captured from
-stderr (where dialog writes the user's selection by default).
+There are deliberately no run_command()/run_in_chroot() helpers here any
+more: every OS command the installer runs comes from a JSON profile and is
+executed through ExecutionContext (lib/context.py), which owns both the
+host engine and the target (chroot) engine. See README.md's Golden Rule
+section.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +33,7 @@ class Logger:
     _RED    = "\033[0;31m"
     _GREEN  = "\033[0;32m"
     _YELLOW = "\033[1;33m"
+    _BLUE   = "\033[0;34m"
     _NC     = "\033[0m"
 
     _logger: Optional[logging.Logger] = None
@@ -70,6 +75,12 @@ class Logger:
         print(f"{cls._RED}[ERROR]{cls._NC} {message}", file=sys.stderr)
         cls._get().error(message)
 
+    @classmethod
+    def command(cls, message: str) -> None:
+        """Log a resolved profile command before (or instead of) running it."""
+        print(f"{cls._BLUE}[CMD]{cls._NC} {message}")
+        cls._get().debug(f"CMD: {message}")
+
 
 # ---------------------------------------------------------------------------
 # DialogManager
@@ -91,8 +102,7 @@ class DialogManager:
         if cls._backend:
             return cls._backend
         for prog in ("dialog", "whiptail"):
-            r = subprocess.run(["which", prog], capture_output=True)
-            if r.returncode == 0:
+            if shutil.which(prog):
                 cls._backend = prog
                 return prog
         raise RuntimeError("Neither dialog nor whiptail found on PATH")
@@ -166,6 +176,32 @@ class DialogManager:
         return choice if rc == 0 else None
 
     @classmethod
+    def checklist(
+        cls,
+        title: str,
+        text: str,
+        items: List[Tuple[str, str, bool]],
+        height: int = 20,
+        width: int = 74,
+        list_height: int = 12,
+    ) -> Optional[List[str]]:
+        """
+        Show a multi-selection checklist. Items are (tag, label, preselected).
+        Returns the list of selected tags, or None if cancelled.
+        """
+        flat: List[str] = []
+        for tag, label, on in items:
+            flat += [tag, label, "on" if on else "off"]
+        rc, choice = cls._run(
+            ["--title", title, "--checklist", text,
+             str(height), str(width), str(list_height)] + flat,
+            capture=True,
+        )
+        if rc != 0:
+            return None
+        return [tag.strip('"') for tag in choice.split()]
+
+    @classmethod
     def inputbox(
         cls,
         title: str,
@@ -205,15 +241,22 @@ class DialogManager:
 # Installation configuration state
 # ---------------------------------------------------------------------------
 
+MODE_CLEAN = "clean"
+MODE_INPLACE = "inplace"
+
+
 class Configuration:
     """Mutable state bag shared across all installer modules."""
 
     def __init__(self) -> None:
-        # OS / edition
-        self.os_edition: Optional[str] = None  # "debian" | "arch" | "freebsd"
+        # Mode and target
+        self.mode: str = MODE_CLEAN            # MODE_CLEAN | MODE_INPLACE
+        self.target_os: Optional[str] = None   # edition being installed
+        self.target_root: str = "/mnt"         # "/" in in-place mode
+        self.host_os: Optional[str] = None     # edition the installer runs on
 
         # Boot
-        self.boot_mode: Optional[str] = None  # "UEFI" | "BIOS"
+        self.boot_mode: Optional[str] = None   # "UEFI" | "BIOS"
 
         # Disk layout (set by DiskInstaller)
         self.disk: Optional[str] = None            # e.g. /dev/sda
@@ -223,12 +266,23 @@ class Configuration:
 
         # ZFS
         self.pool_name: str = "rpool"
+        self.ashift: int = 12
+        self.compression: str = "lz4"
+
+        # Base system provisioning
+        self.bootstrap_method: Optional[str] = None   # "debootstrap" | "tarball" | ...
+        self.arch: str = "amd64"
+        self.suite: str = ""
+        self.mirror: str = ""
+        self.rootfs_url: str = ""
 
         # System
         self.hostname: str = "freedomnas"
         self.domain: str = "local"
         self.timezone: str = "UTC"
-        self.debian_mirror: str = "http://deb.debian.org/debian"
+
+        # Package selection (MANIFEST.json category ids)
+        self.package_categories: List[str] = []
 
         # Primary admin user
         self.username: str = "admin"
@@ -237,9 +291,14 @@ class Configuration:
         # Extra users added during install
         self.additional_users: List[dict] = []
 
+    @property
+    def root_dataset(self) -> str:
+        """Boot dataset for the target edition, e.g. rpool/ROOT/debian."""
+        return f"{self.pool_name}/ROOT/{self.target_os}"
+
 
 # ---------------------------------------------------------------------------
-# Subprocess helpers — shell=False only
+# Filesystem helpers — pure Python I/O, never shell commands
 # ---------------------------------------------------------------------------
 
 def check_root() -> None:
@@ -247,48 +306,6 @@ def check_root() -> None:
     if os.geteuid() != 0:
         Logger.error("This installer must be run as root.")
         sys.exit(1)
-
-
-def run_command(args: List[str], check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
-    """
-    Run a command without a shell.
-
-    Args:
-        args:    Command + arguments as a list.
-        check:   Raise CalledProcessError on non-zero exit.
-        timeout: Seconds before killing the process (default 5 min).
-
-    Returns:
-        CompletedProcess with stdout/stderr captured as text.
-    """
-    Logger.info(f"RUN: {' '.join(args)}")
-    try:
-        return subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=timeout,
-        )
-    except subprocess.CalledProcessError as exc:
-        Logger.error(f"Command failed (exit {exc.returncode}): {' '.join(args)}")
-        if exc.stderr:
-            Logger.error(exc.stderr.strip())
-        raise
-    except subprocess.TimeoutExpired:
-        Logger.error(f"Command timed out after {timeout}s: {' '.join(args)}")
-        raise
-
-
-def run_in_chroot(
-    args: List[str], chroot_dir: str = "/mnt", check: bool = True, timeout: int = 300
-) -> subprocess.CompletedProcess:
-    """
-    Run a command inside a chroot environment.
-
-    Wraps the command as: chroot <chroot_dir> <args...>
-    """
-    return run_command(["chroot", chroot_dir] + args, check=check, timeout=timeout)
 
 
 def write_file(path: str, content: str, mode: int = 0o644) -> None:
