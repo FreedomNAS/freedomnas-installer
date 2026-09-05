@@ -29,9 +29,7 @@ class PackagesInstaller:
         self.config = config
         self.ctx = ctx
         pm_module = corelink.package_manager_module()
-        self.packages = pm_module.PackageManager(
-            packages_dir=str(corelink.find_profiles_dir() / "packages")
-        )
+        self.packages = pm_module.PackageManager(packages_dir=str(ctx.packages_dir))
 
     # ------------------------------------------------------------------
     # Selection

@@ -44,6 +44,11 @@ class ExecutionContext:
         engine_mod = corelink.engine_module()
         self._engine_cls = engine_mod.FreedomNASEngine
         self.profile_dir = str(profile_dir or corelink.find_profiles_dir())
+        # Every step reads profiles through these, so --profiles points the
+        # command maps, the package lists and the assets at the same tree.
+        self.profiles = Path(self.profile_dir)
+        self.packages_dir = self.profiles / "packages"
+        self.assets_dir = self.profiles / "assets"
         self.dry_run = dry_run
 
         if host_os:

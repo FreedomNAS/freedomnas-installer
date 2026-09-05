@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-import corelink
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, write_file
 
@@ -44,7 +43,7 @@ class BootloaderInstaller:
         self.dialog = dialog
         self.config = config
         self.ctx = ctx
-        self.assets = corelink.find_assets_dir()
+        self.assets = ctx.assets_dir
 
     # ------------------------------------------------------------------
     # Public steps

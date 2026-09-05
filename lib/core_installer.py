@@ -24,7 +24,6 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
-import corelink
 from context import ExecutionContext
 from installer_modules import Logger, Configuration
 
@@ -87,7 +86,7 @@ class CoreInstaller:
         let the WebUI's first-run wizard take over — and is shared, verbatim,
         with the images freedomnas-image-builder produces.
         """
-        assets = corelink.find_assets_dir()
+        assets = self.ctx.assets_dir
         bin_dir = self.ctx.ensure_target_dir(f"{_INSTALL_ROOT}/webui/bin")
 
         for script in ("firstboot.sh", "supervisor.sh"):
@@ -118,7 +117,7 @@ class CoreInstaller:
         if not core.is_dir():
             core = repo_parent / "freedomnas-core"
 
-        profiles = corelink.find_profiles_dir()
+        profiles = self.ctx.profiles
 
         webui: Optional[Path] = installed / "webui"
         if not webui.is_dir():

@@ -143,9 +143,49 @@ class InPlaceInstaller:
     # Execution
     # ------------------------------------------------------------------
 
+    def prepare_package_manager(self) -> None:
+        """
+        Write the profile files marked `inplace`, before anything is
+        installed.
+
+        A clean install writes every file the edition declares; a running
+        system must not have its hostname or fstab rewritten under it. The
+        exception is package-manager drop-ins — Gentoo needs the packages
+        FreedomNAS depends on but that are still ~arch to be accepted, or
+        emerge refuses the whole set. Those entries are additive files in a
+        drop-in directory, named after us, so they add to the admin's
+        configuration instead of replacing it.
+        """
+        variables = {
+            "hostname": self.config.hostname,
+            "fqdn": self.config.hostname,
+            "domain": self.config.domain,
+            "timezone": self.config.timezone,
+            "mirror": self.config.mirror,
+            "suite": self.config.suite,
+            "arch": self.config.arch,
+            "esp_device": "",
+            "esp_spec": "",
+            "pool_name": self.config.pool_name,
+            "edition": self.config.target_os,
+        }
+
+        for name, spec in sorted(self.ctx.target.profile.get("files", {}).items()):
+            if not spec.get("inplace"):
+                continue
+            parent = self.ctx.target_path(spec["path"]).parent
+            if parent.exists() and not parent.is_dir():
+                Logger.warn(
+                    f"{parent} is a file, not a drop-in directory — add the "
+                    f"contents of files.{name} to it by hand"
+                )
+                continue
+            self.ctx.write_target_file(name, **variables)
+
     def execute(self) -> None:
         Logger.info(f"Installing FreedomNAS onto the running {self.config.target_os} system")
 
+        self.prepare_package_manager()
         self.packages.install_packages(fresh_root=False)
         self.packages.enable_services()
 

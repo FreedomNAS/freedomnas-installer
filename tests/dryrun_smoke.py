@@ -90,15 +90,15 @@ def run_clean(target_os, target_root, host_os="debian", bootstrap=None):
     return config
 
 
-def run_inplace():
-    print("\n=== in-place install: debian ===")
+def run_inplace(edition="debian"):
+    print(f"\n=== in-place install: {edition} ===")
     FakeDialog.menu_answers = {"Configuration Storage": "NONE"}
     config = Configuration()
-    config.target_os = "debian"
+    config.target_os = edition
     ctx = ExecutionContext(
-        target_os="debian",
+        target_os=edition,
         target_root="/",
-        host_os="debian",
+        host_os=edition,
         dry_run=True,
         profile_dir=PROFILES,
     )
@@ -138,6 +138,10 @@ def main():
     inplace = run_inplace()
     assert inplace.target_root == "/"
     assert "core" in inplace.package_categories
+
+    # Gentoo in-place: the accept-keywords drop-in has to be written before
+    # emerge runs, or the whole package set is refused on a stable system.
+    run_inplace("gentoo")
 
     linux_host = [t["edition"] for t in targets if t["os_family"] == "linux"]
     bsd_host = [t["edition"] for t in targets if t["os_family"] == "bsd"]
