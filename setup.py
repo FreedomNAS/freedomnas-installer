@@ -31,7 +31,11 @@ import signal
 import sys
 from typing import Dict, List, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+# realpath, not abspath: the entry point is reached through the
+# /usr/bin/freedomnas-install symlink, and abspath would leave it
+# unresolved and look for lib/ next to the symlink.
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(_HERE, "lib"))
 
 import corelink
 from context import ExecutionContext
