@@ -56,7 +56,7 @@ class CoreInstaller:
     def install_freedomnas(self) -> None:
         """Deploy core, profiles and webui into the target root."""
         if self.ctx.target_root == "/":
-            Logger.info("In-place mode — FreedomNAS is already installed on this system")
+            self._check_existing_install()
             return
 
         core_src, profiles_src, webui_src = self._sources()
@@ -75,6 +75,31 @@ class CoreInstaller:
 
         self._write_pth()
         Logger.info("FreedomNAS installed into the target")
+
+    def _check_existing_install(self) -> None:
+        """
+        In-place mode installs no files of its own: FreedomNAS is expected to
+        be here already, through the distribution's packages. Say which piece
+        is missing instead of leaving the WebUI to fail at boot with an
+        import error nobody can trace back to here.
+        """
+        expected = {
+            "freedomnas-core": Path(f"{_INSTALL_ROOT}/core/freedomnas"),
+            "freedomnas-profiles": Path(self.ctx.profiles),
+            "freedomnas-webui": Path(f"{_INSTALL_ROOT}/webui/api"),
+        }
+        missing = [name for name, path in expected.items() if not path.is_dir()]
+
+        if not missing:
+            Logger.info("In-place mode — FreedomNAS is already installed on this system")
+            return
+
+        Logger.warn(
+            "Not installed on this system: " + ", ".join(missing)
+        )
+        Logger.warn(
+            "Install those packages too, or the WebUI will not start at boot"
+        )
 
     def install_firstboot(self) -> None:
         """
