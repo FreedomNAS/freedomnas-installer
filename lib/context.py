@@ -244,6 +244,9 @@ class ExecutionContext:
             if content not in existing:
                 dest.write_text(existing + content)
         else:
+            # A previous run may have left the file read-only (sudoers is
+            # 0440), and writing over it would fail: replace it outright.
+            dest.unlink(missing_ok=True)
             dest.write_text(content)
             dest.chmod(spec.get("mode", 0o644))
         return dest
