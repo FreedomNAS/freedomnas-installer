@@ -96,11 +96,11 @@ class PackagesInstaller:
             Logger.warn("No packages selected — skipping package installation")
             return
 
-        Logger.info(f"Updating package cache ({self.config.target_os})...")
-        if fresh_root and self.ctx.has("bootstrap", "update_cache"):
-            self.ctx.target_run("bootstrap", "update_cache", timeout=600, check=False)
-        else:
-            self.ctx.target_run("packages", "update_cache", timeout=600, check=False)
+        self._update_cache(fresh_root)
+
+        if self.setup_repositories():
+            # The new sources are only visible after a second refresh.
+            self._update_cache(fresh_root)
 
         Logger.info(f"Installing {len(packages)} packages...")
         if fresh_root and self.ctx.has("bootstrap", "install_base"):
@@ -112,6 +112,39 @@ class PackagesInstaller:
                 "packages", "install", timeout=3600, package_name=" ".join(packages)
             )
         Logger.info("Packages installed")
+
+    def _update_cache(self, fresh_root: bool) -> None:
+        Logger.info(f"Updating package cache ({self.config.target_os})...")
+        if fresh_root and self.ctx.has("bootstrap", "update_cache"):
+            self.ctx.target_run("bootstrap", "update_cache", timeout=600, check=False)
+        else:
+            self.ctx.target_run("packages", "update_cache", timeout=600, check=False)
+
+    def setup_repositories(self) -> bool:
+        """
+        Configure any extra package repository a selected category needs,
+        inside the target, before its packages are looked for.
+
+        Debian's container packages come from Docker's own repository rather
+        than from Debian, so asking apt for them without adding it first fails
+        outright. The steps live in the profile as a command sequence — which
+        repository, and how it is trusted, is not something to decide here.
+
+        Returns True if anything was configured.
+        """
+        configured = False
+        for category in self.config.package_categories:
+            if not self.ctx.has("repositories", category):
+                continue
+            Logger.info(f"Configuring the '{category}' repository...")
+            self.ctx.target_run(
+                "repositories", category,
+                timeout=900,
+                suite=self.config.suite,
+                arch=self.config.arch,
+            )
+            configured = True
+        return configured
 
     def enable_services(self) -> None:
         """

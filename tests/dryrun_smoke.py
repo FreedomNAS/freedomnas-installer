@@ -39,9 +39,14 @@ class FakeDialog(DialogManager):
             return cls.menu_answers[title]
         return items[0][0]
 
+    # containers is not preselected, but it is the one category that needs a
+    # repository configured first, so the dry run has to walk that path.
+    extra_categories = ["containers"]
+
     @classmethod
     def checklist(cls, title, text, items, *args, **kwargs):
-        return [tag for tag, _, on in items if on]
+        chosen = [tag for tag, _, on in items if on]
+        return chosen + [t for t in cls.extra_categories if t not in chosen]
 
     @classmethod
     def inputbox(cls, title, text, init_text="", *args, **kwargs):
