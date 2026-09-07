@@ -54,6 +54,12 @@ class Logger:
                 )
                 fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
                 cls._logger.addHandler(fh)
+                # The core logs the full output of a command that failed;
+                # without this it would go nowhere and the installer log would
+                # keep only the tail carried by the exception.
+                core = logging.getLogger("FreedomNAS")
+                core.setLevel(logging.DEBUG)
+                core.addHandler(fh)
                 break
             except (OSError, PermissionError):
                 continue
