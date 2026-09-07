@@ -275,6 +275,13 @@ class SystemInstaller:
         Logger.info("Chroot ready")
 
     def teardown_chroot(self) -> None:
+        """
+        Undo what setup_chroot did, plus whatever the edition has to take back
+        out of the target before it boots on its own — Debian's policy-rc.d,
+        which keeps package scripts from starting daemons inside the chroot.
+        """
+        if self.ctx.has("chroot", "finalize"):
+            self.ctx.target_run("chroot", "finalize", check=False)
         self.ctx.host_run("chroot", "unmount", check=False, root=self.config.target_root)
 
     def _copy_resolv_conf(self) -> None:
