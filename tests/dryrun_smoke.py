@@ -73,7 +73,8 @@ def run_clean(target_os, target_root, host_os="debian", bootstrap=None):
     if bootstrap:
         FakeDialog.menu_answers["Bootstrap Method"] = bootstrap
     FakeDialog.text_answers = {
-        "Rootfs Tarball": f"https://example.invalid/{target_os}-rootfs.tar.xz"
+        "Rootfs Tarball": f"https://example.invalid/{target_os}-rootfs.tar.xz",
+        "Root Pool Name": "fnaspool",
     }
     config = Configuration()
     config.target_os = target_os
@@ -116,20 +117,22 @@ def main():
 
     clean = run_clean("debian", "/tmp/freedomnas-smoke-root")
     assert clean.part1 == "/dev/sda1", clean.part1
-    assert clean.root_dataset == "rpool/ROOT/debian", clean.root_dataset
+    # The pool name is asked for now, not assumed
+    assert clean.pool_name == "fnaspool", clean.pool_name
+    assert clean.root_dataset == "fnaspool/ROOT/debian", clean.root_dataset
     assert "core" in clean.package_categories, clean.package_categories
 
     # Tarball bootstrap: xbps-install is absent on a Debian host, so the
     # tarball method is the only one left and must carry the whole install.
     void = run_clean("void", "/tmp/freedomnas-smoke-void", bootstrap="tarball")
     assert void.bootstrap_method == "tarball", void.bootstrap_method
-    assert void.root_dataset == "rpool/ROOT/void", void.root_dataset
+    assert void.root_dataset == "fnaspool/ROOT/void", void.root_dataset
 
     # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is
     # also the case where host and target edition are the same rolling distro.
     gentoo = run_clean("gentoo", "/tmp/freedomnas-smoke-gentoo", host_os="gentoo")
     assert gentoo.bootstrap_method == "tarball", gentoo.bootstrap_method
-    assert gentoo.root_dataset == "rpool/ROOT/gentoo", gentoo.root_dataset
+    assert gentoo.root_dataset == "fnaspool/ROOT/gentoo", gentoo.root_dataset
 
     # A BSD host sees only BSD targets, and installs them natively.
     freebsd = run_clean("freebsd", "/tmp/freedomnas-smoke-freebsd", host_os="freebsd")

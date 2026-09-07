@@ -266,6 +266,9 @@ class Configuration:
 
         # ZFS
         self.pool_name: str = "rpool"
+        # The running system's root, read from it rather than assumed: a root
+        # dataset can be rpool/os/gentoo just as well as rpool/ROOT/debian.
+        self.detected_root_dataset: Optional[str] = None
         self.ashift: int = 12
         self.compression: str = "lz4"
 
@@ -293,7 +296,12 @@ class Configuration:
 
     @property
     def root_dataset(self) -> str:
-        """Boot dataset for the target edition, e.g. rpool/ROOT/debian."""
+        """
+        The boot dataset: the one detected on the running system when there is
+        one, otherwise the layout a clean install is about to create.
+        """
+        if self.detected_root_dataset:
+            return self.detected_root_dataset
         return f"{self.pool_name}/ROOT/{self.target_os}"
 
 

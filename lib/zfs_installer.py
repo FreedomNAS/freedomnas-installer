@@ -22,9 +22,13 @@ the host's job, since the target system does not exist yet.
 from __future__ import annotations
 
 import os
+import re
 
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, directory_exists
+
+# ZFS pool names: a letter, then letters, digits and _ - . :
+_POOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]*$")
 
 
 class ZFSInstaller:
@@ -38,6 +42,63 @@ class ZFSInstaller:
     # ------------------------------------------------------------------
     # Public steps
     # ------------------------------------------------------------------
+
+    def prompt_pool_name(self) -> None:
+        """
+        Ask what the root pool should be called, and refuse a name already in
+        use.
+
+        The name used to be an unasked constant. On a machine that already had
+        a pool by that name — a second NAS, a disk from another system, a
+        dual-boot install — creation collided, and what the installer then
+        recorded in config.yaml named someone else's pool.
+        """
+        existing = self._existing_pools()
+
+        while True:
+            text = "Name for the FreedomNAS root pool:"
+            if existing:
+                text += "\n\nAlready on this machine: " + ", ".join(existing)
+
+            name = self.dialog.inputbox(
+                "Root Pool Name", text,
+                init_text=self.config.pool_name, height=12, width=70,
+            )
+            if not name or not name.strip():
+                continue
+            name = name.strip()
+
+            if not _POOL_NAME.match(name):
+                self.dialog.msgbox(
+                    "Invalid Name",
+                    "A pool name starts with a letter and may contain letters,\n"
+                    "digits, and _ - . :",
+                    height=10, width=62,
+                )
+                continue
+
+            if name in existing:
+                self.dialog.msgbox(
+                    "Name In Use",
+                    f"A pool named '{name}' is already imported on this machine.\n"
+                    "Choose another name, or the two would be indistinguishable.",
+                    height=10, width=66,
+                )
+                continue
+
+            self.config.pool_name = name
+            Logger.info(f"Root pool: {name}")
+            return
+
+    def _existing_pools(self) -> list:
+        try:
+            stdout, _ = self.ctx.host_run(
+                "rootpool", "list_pools", check=False, timeout=60
+            )
+        except Exception as exc:
+            Logger.warn(f"Could not list existing pools: {exc}")
+            return []
+        return [line.strip() for line in stdout.splitlines() if line.strip()]
 
     def create_root_pool(self) -> None:
         """Create the pool, its datasets, and mount them under the target root."""

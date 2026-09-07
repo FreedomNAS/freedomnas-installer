@@ -60,6 +60,7 @@ class InPlaceInstaller:
     def interview(self) -> None:
         self.config.hostname = socket.gethostname() or self.config.hostname
         self.config.timezone = self._current_timezone()
+        self._detect_root_dataset()
 
         self.packages.select_categories()
 
@@ -74,6 +75,27 @@ class InPlaceInstaller:
             self.users.prompt_admin_user()
 
         self._state_pool = self._select_state_pool()
+
+    def _detect_root_dataset(self) -> None:
+        """
+        Ask the running system what its root dataset is.
+
+        Composing one from a pool name and an edition guesses a layout this
+        machine need not have: rpool/os/gentoo is as valid a root as
+        rpool/ROOT/debian, and an in-place install has no business assuming.
+        """
+        try:
+            dataset, _ = self.ctx.host_run(
+                "rootpool", "detect_root_dataset", check=False, timeout=30
+            )
+        except Exception as exc:
+            Logger.warn(f"Could not detect the root dataset: {exc}")
+            return
+
+        dataset = dataset.strip()
+        if dataset and "/" in dataset:
+            self.config.detected_root_dataset = dataset
+            Logger.info(f"Root dataset: {dataset}")
 
     def _current_timezone(self) -> str:
         """Read /etc/timezone or the /etc/localtime symlink — plain file I/O."""
@@ -131,6 +153,7 @@ class InPlaceInstaller:
             f"System     : {self.ctx.os_info()['os_name']} ({self.config.target_os})\n"
             f"Init       : {self.ctx.target.init_system}\n"
             f"Hostname   : {self.config.hostname}\n"
+            f"Root       : {self.config.detected_root_dataset or 'not on ZFS'}\n"
             f"Features   : {', '.join(self.config.package_categories)}\n"
             f"Admin      : {self.config.username if self._create_admin else 'existing accounts'}\n"
             f"State      : {self._state_pool + '/.freedomnas' if self._state_pool else StateWriter.fallback_path()}\n\n"

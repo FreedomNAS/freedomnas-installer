@@ -58,6 +58,7 @@ class CleanInstaller:
         self.system.load_defaults()
 
         self.disk.select_disk()
+        self.zfs.prompt_pool_name()
         self.system.select_bootstrap_method()
         self.system.select_mirror()
         self.system.prompt_rootfs_url()
