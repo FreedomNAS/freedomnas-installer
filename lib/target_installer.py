@@ -14,6 +14,8 @@ happens before that confirmation.
 
 from __future__ import annotations
 
+import os
+
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, MODE_CLEAN
 from bootloader_installer import BootloaderInstaller
@@ -29,11 +31,20 @@ from zfs_installer import ZFSInstaller
 class CleanInstaller:
     """Full provisioning of a target disk."""
 
-    def __init__(self, dialog: DialogManager, config: Configuration, ctx: ExecutionContext) -> None:
+    def __init__(
+        self,
+        dialog: DialogManager,
+        config: Configuration,
+        ctx: ExecutionContext,
+        owns_target_root: bool = False,
+    ) -> None:
         self.dialog = dialog
         self.config = config
         self.ctx = ctx
         self.config.mode = MODE_CLEAN
+        # True when the directory was made for this run, and so is ours to
+        # remove once everything is unmounted.
+        self._owns_target_root = owns_target_root
 
         self.system = SystemInstaller(dialog, config, ctx)
         self.disk = DiskInstaller(dialog, config, ctx)
@@ -134,6 +145,18 @@ class CleanInstaller:
         if self._pool_created:
             self.zfs.export_pool()
             self._pool_created = False
+        self._remove_target_root()
+
+    def _remove_target_root(self) -> None:
+        """Take away the directory we made, if nothing is left inside it."""
+        if not self._owns_target_root:
+            return
+        try:
+            os.rmdir(self.config.target_root)
+        except OSError:
+            Logger.warn(f"Left {self.config.target_root} in place — not empty")
+            return
+        self._owns_target_root = False
 
     # ------------------------------------------------------------------
     # Entry point

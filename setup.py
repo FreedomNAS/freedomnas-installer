@@ -29,7 +29,8 @@ import argparse
 import os
 import signal
 import sys
-from typing import Dict, List, Optional
+import tempfile
+from typing import Dict, List, Optional, Tuple
 
 # realpath, not abspath: the entry point is reached through the
 # /usr/bin/freedomnas-install symlink, and abspath would leave it
@@ -62,6 +63,30 @@ def _installable_targets(profile_dir: str, host_family: str) -> List[Dict[str, s
         target for target in ExecutionContext.available_targets(profile_dir)
         if target["os_family"] == host_family
     ]
+
+
+def _make_target_root(explicit: Optional[str], dry_run: bool) -> Tuple[str, bool]:
+    """
+    Decide where the target system gets assembled.
+
+    /mnt is shared ground: something may already be mounted there, and
+    whatever is under it would be swallowed into the new system — or collide
+    with it. A directory made for this run cannot. Returns the path and
+    whether we created it, so cleanup knows what to take away again.
+    """
+    if explicit:
+        return explicit, False
+
+    if dry_run:
+        return "/mnt/freedomnas-install.dry-run", False
+
+    for parent in ("/mnt", None):
+        try:
+            return tempfile.mkdtemp(prefix="freedomnas-install.", dir=parent), True
+        except OSError:
+            continue
+
+    raise RuntimeError("Could not create a directory to assemble the target in")
 
 
 def _detect_existing_state(ctx: ExecutionContext) -> bool:
@@ -168,8 +193,9 @@ def main() -> int:
         "--target", help="Edition to install (skips the edition menu)",
     )
     parser.add_argument(
-        "--target-root", default="/mnt",
-        help="Where the target system is assembled in clean mode (default: /mnt)",
+        "--target-root", default=None,
+        help="Where the target system is assembled in clean mode "
+             "(default: a directory made for this run, under /mnt)",
     )
     parser.add_argument(
         "--profiles", help="Path to freedomnas-profiles (default: the engine's search path)",
@@ -221,6 +247,7 @@ def main() -> int:
     if mode == "recovery":
         return _run_recovery(dialog)
 
+    owns_root = False
     if mode == MODE_INPLACE:
         target_os = host.os_type
         if target_os not in [t["edition"] for t in targets]:
@@ -235,7 +262,8 @@ def main() -> int:
         if not target_os:
             Logger.warn("No edition selected — exiting")
             return 1
-        target_root = args.target_root
+        target_root, owns_root = _make_target_root(args.target_root, args.dry_run)
+        Logger.info(f"Assembling the target in {target_root}")
 
     config.target_os = target_os
     config.target_root = target_root
@@ -248,10 +276,10 @@ def main() -> int:
         profile_dir=profile_dir,
     )
 
-    installer = (
-        InPlaceInstaller(dialog, config, ctx) if mode == MODE_INPLACE
-        else CleanInstaller(dialog, config, ctx)
-    )
+    if mode == MODE_INPLACE:
+        installer = InPlaceInstaller(dialog, config, ctx)
+    else:
+        installer = CleanInstaller(dialog, config, ctx, owns_target_root=owns_root)
 
     def _on_interrupt(_signum, _frame):
         Logger.warn("Interrupted — cleaning up")
