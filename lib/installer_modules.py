@@ -107,6 +107,18 @@ class DialogManager:
                 return prog
         raise RuntimeError("Neither dialog nor whiptail found on PATH")
 
+    @staticmethod
+    def _printable(value: str) -> str:
+        """
+        Strip the control bytes a command's own error output can carry.
+
+        A NUL in an argument makes exec() raise, which turned a recoverable
+        failure into a traceback: `zfs mount --all` reports the bad option as
+        `invalid option '\0'`, and showing that error in a dialog crashed the
+        installer instead of explaining what went wrong.
+        """
+        return "".join(c for c in value if c == "\n" or c >= " ")
+
     @classmethod
     def _run(cls, extra_args: List[str], capture: bool = False) -> Tuple[int, str]:
         """
@@ -115,7 +127,7 @@ class DialogManager:
         stderr_text is non-empty only when capture=True.
         """
         backend = cls._get_backend()
-        cmd = [backend] + extra_args
+        cmd = [backend] + [cls._printable(a) for a in extra_args]
         if capture:
             fd, tmp = tempfile.mkstemp()
             os.close(fd)

@@ -94,13 +94,17 @@ class CleanInstaller:
         self.disk.partition_disk()
         self.disk.format_partitions()
 
-        self.zfs.create_root_pool()
+        # Claim each of these before doing it, not after: a failure partway
+        # through still leaves a pool imported or a filesystem mounted, and
+        # cleanup has to know to undo it. Every undo runs with check=False,
+        # so claiming one that never happened costs nothing.
         self._pool_created = True
+        self.zfs.create_root_pool()
 
         self.system.bootstrap_base_system()
         self.system.configure_system()
-        self.system.setup_chroot()
         self._chroot_ready = True
+        self.system.setup_chroot()
 
         # Users before packages: PAM/Samba must find the accounts already
         # there when those services are first configured.
@@ -113,8 +117,8 @@ class CleanInstaller:
         self.core.install_freedomnas()
         self.core.install_firstboot()
 
-        self.bootloader.install_bootloader()
         self._esp_mounted = True
+        self.bootloader.install_bootloader()
 
         self.state.mount_state_dataset()
         self.state.save()
