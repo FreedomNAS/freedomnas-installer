@@ -69,13 +69,17 @@ class BootloaderInstaller:
         Logger.info("Boot chain installed")
 
     def mount_esp(self) -> None:
-        self.ctx.ensure_target_dir(f"{_ESP_IN_TARGET}{_UKI_DIR}")
+        self.ctx.ensure_target_dir(_ESP_IN_TARGET)
         if self.config.part1:
             self.ctx.host_run(
                 "partitioning", "mount_esp",
                 device=self.config.part1,
                 mountpoint=str(self.ctx.target_path(_ESP_IN_TARGET)),
             )
+        # After the mount, not before: the ESP was just formatted, and a
+        # directory made under the mountpoint is hidden the moment something
+        # is mounted over it.
+        self.ctx.ensure_target_dir(f"{_ESP_IN_TARGET}{_UKI_DIR}")
 
     def unmount_esp(self) -> None:
         self.ctx.host_run(
