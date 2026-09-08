@@ -136,11 +136,29 @@ class ZFSInstaller:
         Logger.info("Root pool ready")
 
     def export_pool(self) -> None:
-        """Unmount everything and export the pool (end of installation)."""
-        self.ctx.host_run("rootpool", "unmount_all", check=False)
-        self.ctx.host_run(
-            "rootpool", "export", check=False, pool_name=self.config.pool_name
-        )
+        """
+        Export the pool (end of installation).
+
+        This is not a formality. A pool left imported keeps the installer
+        host's hostid in its label, and the machine that was just installed
+        then refuses to import its own root pool at boot. `zpool export`
+        unmounts the pool's own datasets first, so nothing else has to.
+        """
+        pool = self.config.pool_name
+        try:
+            self.ctx.host_run("rootpool", "export", pool_name=pool)
+            return
+        except Exception as exc:
+            Logger.warn(f"Could not export {pool} ({exc}) — retrying with force")
+
+        try:
+            self.ctx.host_run("rootpool", "export_force", pool_name=pool)
+        except Exception as exc:
+            Logger.error(
+                f"The pool {pool} is still imported: {exc}\n"
+                f"The installed system will not boot until it is exported. "
+                f"Run 'zpool export {pool}' before rebooting."
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
