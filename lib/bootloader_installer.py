@@ -179,14 +179,20 @@ class BootloaderInstaller:
             Logger.warn("Profile declares no efi_boot_entry — relying on the ESP fallback path")
             return
         Logger.info("Registering UEFI boot entry...")
-        self.ctx.target_run(
-            "bootloader", "efi_boot_entry",
-            check=False,
-            disk=self.config.disk,
-            part_num=1,
-            loader_path=loader_path,
-            label="FreedomNAS",
-        )
+        try:
+            self.ctx.target_run(
+                "bootloader", "efi_boot_entry",
+                disk=self.config.disk,
+                part_num=1,
+                loader_path=loader_path,
+                label="FreedomNAS",
+            )
+        except Exception as exc:
+            Logger.error(
+                f"Could not register the UEFI boot entry: {exc}\n"
+                f"The firmware has no way to find {loader_path}. Add it by hand "
+                f"with efibootmgr, or select the file from the firmware's boot menu."
+            )
 
     def _deploy_bios_chain(self) -> None:
         """
