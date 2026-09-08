@@ -306,6 +306,20 @@ def main() -> int:
         return 1
 
     if mode == MODE_CLEAN:
+        if getattr(installer.zfs, "export_failed", False):
+            # Offering a reboot here would be offering a machine that cannot
+            # import its own root pool.
+            dialog.msgbox(
+                "Installation Complete — Action Required",
+                f"FreedomNAS ({target_os}) has been installed, but the pool "
+                f"{config.pool_name} is still imported.\n\n"
+                "Until it is exported, the installed system refuses to import "
+                "its own root pool at boot.\n\nRun this, then reboot:\n\n"
+                f"  zpool export {config.pool_name}",
+                16, 70,
+            )
+            return 0
+
         if dialog.yesno(
             "Installation Complete",
             f"FreedomNAS ({target_os}) has been installed.\n\n"

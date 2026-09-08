@@ -23,12 +23,16 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, directory_exists
 
 # ZFS pool names: a letter, then letters, digits and _ - . :
 _POOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]*$")
+
+# The chroot is torn down with lazy unmounts, which complete a moment later.
+_EXPORT_SETTLE_SECONDS = 3
 
 
 class ZFSInstaller:
@@ -38,6 +42,7 @@ class ZFSInstaller:
         self.dialog = dialog
         self.config = config
         self.ctx = ctx
+        self.export_failed = False
 
     # ------------------------------------------------------------------
     # Public steps
@@ -139,26 +144,40 @@ class ZFSInstaller:
         """
         Export the pool (end of installation).
 
-        This is not a formality. A pool left imported keeps the installer
-        host's hostid in its label, and the machine that was just installed
-        then refuses to import its own root pool at boot. `zpool export`
-        unmounts the pool's own datasets first, so nothing else has to.
+        This is not a formality. A pool that is still imported keeps the
+        installer host's hostid in its label, and the machine that was just
+        installed then refuses to import its own root pool at boot: "pool was
+        previously in use from another system".
+
+        The exit code is not proof — the chroot's lazy unmounts may still be
+        settling when the export runs — so the pool list decides.
         """
         pool = self.config.pool_name
-        try:
-            self.ctx.host_run("rootpool", "export", pool_name=pool)
-            return
-        except Exception as exc:
-            Logger.warn(f"Could not export {pool} ({exc}) — retrying with force")
+        for action in ("export", "export_force"):
+            self.ctx.host_run("rootpool", action, check=False, pool_name=pool)
+            if not self._pool_is_imported(pool):
+                Logger.info(f"Pool {pool} exported")
+                self.export_failed = False
+                return
+            Logger.warn(f"{pool} is still imported after '{action}' — waiting")
+            time.sleep(_EXPORT_SETTLE_SECONDS)
 
+        self.export_failed = True
+        Logger.error(
+            f"The pool {pool} could not be exported and is still imported.\n"
+            f"The installed system will refuse to import its own root pool at "
+            f"boot. Run 'zpool export {pool}' before rebooting."
+        )
+
+    def _pool_is_imported(self, pool: str) -> bool:
+        """Cannot tell counts as imported: a false alarm is cheaper than a silent failure."""
+        if self.ctx.dry_run:
+            return False
         try:
-            self.ctx.host_run("rootpool", "export_force", pool_name=pool)
-        except Exception as exc:
-            Logger.error(
-                f"The pool {pool} is still imported: {exc}\n"
-                f"The installed system will not boot until it is exported. "
-                f"Run 'zpool export {pool}' before rebooting."
-            )
+            stdout, _ = self.ctx.host_run("rootpool", "list_pools", check=False)
+        except Exception:
+            return True
+        return pool in stdout.split()
 
     # ------------------------------------------------------------------
     # Internal helpers
