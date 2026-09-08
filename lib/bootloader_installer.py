@@ -134,11 +134,26 @@ class BootloaderInstaller:
             return
         dest = self.ctx.target_path("/etc/kernel/postinst.d/zz-dracut-uki")
         Logger.command(f"[file] {dest}")
+        if not self.ctx.dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, dest)
+            dest.chmod(0o755)
+        self._write_uki_conf()
+
+    def _write_uki_conf(self) -> None:
+        """
+        What the hook needs to know about *this* installation: the pool is
+        named by the person installing, and the UKI filenames by the edition.
+        """
+        conf = self.ctx.target_path("/etc/freedomnas/uki.conf")
+        Logger.command(f"[file] {conf}")
         if self.ctx.dry_run:
             return
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, dest)
-        dest.chmod(0o755)
+        write_file(str(conf), (
+            f'ROOT_DATASET="{self.config.root_dataset}"\n'
+            f'UKI_NAME="{self.ctx.meta("uki_name", "")}"\n'
+            f'UKI_RECOVERY_NAME="{self.ctx.meta("uki_recovery_name", "")}"\n'
+        ))
 
     # ------------------------------------------------------------------
     # FreeBSD — native loader
