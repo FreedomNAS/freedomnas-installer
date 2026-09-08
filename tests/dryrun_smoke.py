@@ -56,8 +56,9 @@ class FakeDialog(DialogManager):
     def passwordbox(cls, title, text, *args, **kwargs):
         return "smoketest-password"
 
-    # Answering "yes" to everything would loop forever on "add another user?".
-    yes_titles = {"Administrator Account"}
+    # Answering "yes" to everything would loop forever on "add another user?",
+    # and answering "no" to the timezone would loop forever on its confirmation.
+    yes_titles = {"Administrator Account", "Confirm Timezone"}
 
     @classmethod
     def yesno(cls, title, text, *args, **kwargs):

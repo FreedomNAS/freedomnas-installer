@@ -22,7 +22,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from context import ExecutionContext
 from installer_modules import (
@@ -32,6 +32,30 @@ from installer_modules import (
 # files.webui_cron is deployed by CoreInstaller, together with the scripts
 # it points at, so configure_system() leaves it alone.
 _FILES_OWNED_ELSEWHERE = {"webui_cron"}
+
+_UTC = "UTC"
+
+
+def _available_timezones() -> Set[str]:
+    """
+    The tz database as the host carries it: plain data, not an OS command,
+    and the same names every edition writes into /etc/localtime.
+    """
+    try:
+        import zoneinfo
+        return {z for z in zoneinfo.available_timezones() if z != "localtime"}
+    except Exception:
+        return set()
+
+
+def _time_in(zone: str) -> str:
+    """The clock the admin is about to choose, so the confirmation means something."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(zone)).strftime("%H:%M on %a %d %b %Y")
+    except Exception:
+        return ""
 
 
 class SystemInstaller:
@@ -160,6 +184,57 @@ class SystemInstaller:
         Logger.info(f"Hostname: {self.config.hostname}")
 
     def prompt_timezone(self) -> None:
+        """
+        Pick from the host's tz database: region, then zone, then confirm.
+
+        Typed by hand, a name that does not exist reaches the target as an
+        /etc/localtime symlink pointing at nothing, and the first sign of it
+        is a clock that is wrong.
+        """
+        zones = _available_timezones()
+        if not zones:
+            Logger.warn("No tz database on this host — asking for the name instead")
+            self._prompt_timezone_by_name()
+            return
+
+        regions = sorted({z.split("/", 1)[0] for z in zones if "/" in z})
+        while True:
+            region = self.dialog.menu(
+                "Timezone — Region",
+                "Select the region:",
+                [(_UTC, "Coordinated Universal Time")] + [(r, "") for r in regions],
+                list_height=15,
+            )
+            if region is None:
+                Logger.warn(f"Timezone unchanged: {self.config.timezone}")
+                return
+
+            if region == _UTC:
+                candidate = _UTC
+            else:
+                zone = self.dialog.menu(
+                    f"Timezone — {region}",
+                    "Select the zone:",
+                    [(z.split("/", 1)[1], "") for z in sorted(zones) if z.startswith(f"{region}/")],
+                    list_height=15,
+                )
+                if zone is None:
+                    continue      # back to the region list, not out of the prompt
+                candidate = f"{region}/{zone}"
+
+            now = _time_in(candidate)
+            if self.dialog.yesno(
+                "Confirm Timezone",
+                f"The system clock will use:\n\n    {candidate}\n"
+                + (f"\nThe time there is now {now}.\n" if now else "")
+                + "\nIs that correct?",
+                12, 62,
+            ):
+                self.config.timezone = candidate
+                Logger.info(f"Timezone: {candidate}")
+                return
+
+    def _prompt_timezone_by_name(self) -> None:
         timezone = self.dialog.inputbox(
             "Timezone",
             "Enter the system timezone (e.g. Europe/Rome):",
