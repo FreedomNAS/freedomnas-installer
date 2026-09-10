@@ -14,6 +14,7 @@ changed first, and now the intent is recorded.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -39,14 +40,26 @@ class StateWriter:
 
     def mount_state_dataset(self) -> None:
         """
-        Mount rpool/.freedomnas — it is canmount=noauto, so `zfs mount --all`
+        Mount <pool>/.freedomnas — it is canmount=noauto, so `zfs mount --all`
         deliberately leaves it alone.
+
+        The mount is checked, not assumed: save() writes config.yaml under
+        that path, and if the dataset is not there the file lands on the root
+        dataset instead. The next boot then mounts an empty .freedomnas over
+        it, finds no configuration, and runs the first-run wizard on a system
+        that was already configured.
         """
-        self.ctx.host_run(
-            "rootpool", "mount_dataset",
-            check=False,
-            dataset=f"{self.config.pool_name}/.freedomnas",
-        )
+        dataset = f"{self.config.pool_name}/.freedomnas"
+        self.ctx.host_run("rootpool", "mount_dataset", check=False, dataset=dataset)
+        if self.ctx.dry_run:
+            return
+        mountpoint = self.ctx.target_path(_STATE_DIR)
+        if not os.path.ismount(mountpoint):
+            Logger.error(
+                f"{dataset} is not mounted at {mountpoint}.\n"
+                f"The installation's configuration would be written outside it "
+                f"and lost at the next boot."
+            )
 
     def ensure_state_dataset(self, pool_name: str) -> bool:
         """

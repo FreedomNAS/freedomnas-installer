@@ -28,6 +28,7 @@ class PackagesInstaller:
         self.dialog = dialog
         self.config = config
         self.ctx = ctx
+        self.services_not_enabled = []
         pm_module = corelink.package_manager_module()
         self.packages = pm_module.PackageManager(packages_dir=str(ctx.packages_dir))
 
@@ -150,14 +151,28 @@ class PackagesInstaller:
         """
         Enable each selected category's services through the init profile, so
         this works the same on systemd, OpenRC, runit, s6, dinit and bsd_rc.
+
+        A service that fails to enable does not stop the installation, but it
+        is not swallowed either: a NAS whose Samba never starts is a NAS that
+        looks installed and shares nothing.
         """
         edition = self.config.target_os
+        failed = []
         for category in self.config.package_categories:
             for service in self.packages.get_services_for_os(category, edition):
                 Logger.info(f"Enabling service: {service}")
-                self.ctx.target_run(
-                    "services", "enable", check=False, service_name=service
-                )
+                try:
+                    self.ctx.target_run("services", "enable", service_name=service)
+                except Exception as exc:
+                    Logger.warn(f"Could not enable {service}: {exc}")
+                    failed.append(service)
+
+        self.services_not_enabled = failed
+        if failed:
+            Logger.error(
+                "These services were not enabled and will not start on their "
+                f"own: {', '.join(failed)}"
+            )
 
     def locale_setup(self) -> None:
         """Generate locales where the edition needs an explicit step."""

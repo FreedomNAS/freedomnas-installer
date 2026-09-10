@@ -118,13 +118,18 @@ class BootloaderInstaller:
             recovery_name = self.ctx.meta("uki_recovery_name", "")
             if recovery_name:
                 Logger.info("Building recovery UKI (read-only, single user)...")
-                self.ctx.target_run(
-                    "bootloader", "build_uki_recovery",
-                    timeout=900, check=False,
-                    dataset=self.config.root_dataset,
-                    output_path=f"{_ESP_IN_TARGET}{_UKI_DIR}/{recovery_name}",
-                    kernel_version=kernel_version,
-                )
+                try:
+                    self.ctx.target_run(
+                        "bootloader", "build_uki_recovery",
+                        timeout=900,
+                        dataset=self.config.root_dataset,
+                        output_path=f"{_ESP_IN_TARGET}{_UKI_DIR}/{recovery_name}",
+                        kernel_version=kernel_version,
+                    )
+                except Exception as exc:
+                    # Never fail the installation over the rescue image — but
+                    # the day it is needed is the wrong day to find out.
+                    Logger.warn(f"Recovery UKI not built: {exc}")
 
     def _deploy_kernel_hook(self) -> None:
         """Rebuild the UKI automatically on every future kernel update."""
