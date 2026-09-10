@@ -1,7 +1,10 @@
 #!/usr/bin/make -f
 
+# setup.py here is the installer's entry point, not a distutils build script:
+# without --buildsystem=none, debhelper tries to build it as a Python package
+# and stops with "This feature was removed in compat 12".
 %:
-	dh $@
+	dh $@ --buildsystem=none
 
 override_dh_install:
 	dh_install
