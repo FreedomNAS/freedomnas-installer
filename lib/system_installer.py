@@ -31,7 +31,8 @@ from installer_modules import (
 
 # files.webui_cron is deployed by CoreInstaller, together with the scripts
 # it points at, so configure_system() leaves it alone.
-_FILES_OWNED_ELSEWHERE = {"webui_cron"}
+# Written by CoreInstaller instead, together with the scripts they point at.
+_FILES_OWNED_ELSEWHERE = {"webui_cron", "snapshot_cron"}
 
 _UTC = "UTC"
 

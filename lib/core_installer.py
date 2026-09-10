@@ -124,6 +124,12 @@ class CoreInstaller:
                 (bin_dir / script).chmod(0o755)
 
         self.ctx.write_target_file("webui_cron")
+        # Both install modes come through here, which is why the snapshot
+        # schedule is written here too: an in-place install writes only the
+        # profile files marked `inplace`, and would otherwise get the WebUI
+        # without the snapshots.
+        if self.ctx.has("files", "snapshot_cron"):
+            self.ctx.write_target_file("snapshot_cron")
         Logger.info("First-boot service wired (cron @reboot -> firstboot.sh)")
 
     # ------------------------------------------------------------------
