@@ -201,15 +201,21 @@ class PackagesInstaller:
         edition = self.config.target_os
         init_system = self.ctx.target.init_system
         action = "enable_offline" if self.ctx.has("services", "enable_offline") else "enable"
+        early_action = "enable_early" if self.ctx.has("services", "enable_early") else action
         failed = []
         for category in self.config.package_categories:
-            for service in self.packages.get_services_for_os(category, edition, init_system):
-                Logger.info(f"Enabling service: {service}")
-                try:
-                    self.ctx.target_run("services", action, service_name=service)
-                except Exception as exc:
-                    Logger.warn(f"Could not enable {service}: {exc}")
-                    failed.append(service)
+            groups = (
+                (early_action, self.packages.get_early_services_for_os(category, edition, init_system)),
+                (action, self.packages.get_services_for_os(category, edition, init_system)),
+            )
+            for service_action, services in groups:
+                for service in services:
+                    Logger.info(f"Enabling service: {service}")
+                    try:
+                        self.ctx.target_run("services", service_action, service_name=service)
+                    except Exception as exc:
+                        Logger.warn(f"Could not enable {service}: {exc}")
+                        failed.append(service)
 
         self.services_not_enabled = failed
         if failed:
