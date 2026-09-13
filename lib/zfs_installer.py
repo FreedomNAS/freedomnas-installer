@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import time
+from pathlib import Path
 
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, directory_exists
@@ -139,6 +141,36 @@ class ZFSInstaller:
         )
         self.ctx.host_run("rootpool", "mount_all")
         Logger.info("Root pool ready")
+
+    def install_cachefile(self) -> None:
+        """
+        Give the installed system a zpool.cache listing its root pool, before
+        the initramfs is built so the cache goes into it too.
+
+        A pool created with an altroot has cachefile=none, and the installed
+        system then knows its own pool only through the initramfs scanning
+        for it — while boot services that import from the cache see nothing.
+        The cache is first written to a throwaway file, never to the host's
+        /etc/zfs/zpool.cache: an installation that stops before the export
+        would otherwise leave the new pool in the host's cache, and the host
+        would import it at its next boot. The export at the end removes the
+        pool from that throwaway file only; the copy in the target stays.
+        """
+        if not (self.ctx.has("rootpool", "cachefile_set")
+                and self.ctx.has("rootpool", "cachefile_install")):
+            return
+        cachefile = Path(tempfile.mkdtemp(prefix="freedomnas-zpool-")) / "zpool.cache"
+        Logger.info(f"Writing the cache file for pool '{self.config.pool_name}'...")
+        self.ctx.stage_run(
+            "rootpool", "cachefile_set",
+            pool_name=self.config.pool_name,
+            cachefile=str(cachefile),
+        )
+        self.ctx.stage_run(
+            "rootpool", "cachefile_install",
+            cachefile=str(cachefile),
+            root=self.config.target_root,
+        )
 
     def export_pool(self) -> None:
         """

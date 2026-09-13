@@ -128,6 +128,7 @@ class CleanInstaller:
 
         self.core.install_freedomnas()
         self.core.install_firstboot()
+        self.zfs.install_cachefile()
 
         self._esp_mounted = True
         self.bootloader.install_bootloader()
