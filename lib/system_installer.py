@@ -83,6 +83,29 @@ class SystemInstaller:
         self.config.mirror = self.ctx.meta("mirror", "")
         self.config.rootfs_url = self.ctx.meta("rootfs_tarball_url", "")
 
+    def select_init_system(self) -> None:
+        """
+        Pick the init system when the edition declares more than one in
+        `installer_meta.init_systems` (first entry = default). Service
+        commands, service names and the packages that carry the service
+        scripts all follow from this choice.
+        """
+        choices = self.ctx.meta("init_systems", []) or []
+        if len(choices) < 2:
+            return
+        choice = self.dialog.menu(
+            "Init System",
+            f"Which init system should {self.config.target_os} boot with?",
+            [(name, "default" if index == 0 else "") for index, name in enumerate(choices)],
+            height=14,
+            width=64,
+            list_height=6,
+        )
+        if not choice:
+            raise RuntimeError("No init system selected — installation aborted")
+        self.ctx.set_target_init(choice)
+        Logger.info(f"Init system: {choice}")
+
     def select_bootstrap_method(self) -> None:
         """Pick how the target root gets populated."""
         methods = self.ctx.bootstrap_methods()
@@ -270,6 +293,9 @@ class SystemInstaller:
             "root": self.config.target_root,
             "mirror": self.config.mirror,
             "bootstrap_dir": str(bootstrap_dir),
+            "init_packages": (self.ctx.meta("init_packages", {}) or {}).get(
+                self.ctx.target.init_system, ""
+            ),
         }
         try:
             self.ctx.write_bootstrap_files(bootstrap_dir, **variables)

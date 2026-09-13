@@ -73,11 +73,13 @@ class FakeDialog(DialogManager):
         return None
 
 
-def run_clean(target_os, target_root, host_os="debian", bootstrap=None):
+def run_clean(target_os, target_root, host_os="debian", bootstrap=None, init=None):
     print(f"\n=== clean install: {target_os} (host: {host_os}) ===")
     FakeDialog.menu_answers = {"Select Installation Disk": "/dev/sda"}
     if bootstrap:
         FakeDialog.menu_answers["Bootstrap Method"] = bootstrap
+    if init:
+        FakeDialog.menu_answers["Init System"] = init
     FakeDialog.text_answers = {
         "Rootfs Tarball": f"https://example.invalid/{target_os}-rootfs.tar.xz",
         "Root Pool Name": "fnaspool",
@@ -94,6 +96,8 @@ def run_clean(target_os, target_root, host_os="debian", bootstrap=None):
     )
     installer = CleanInstaller(FakeDialog, config, ctx)
     assert installer.run() is True
+    if init:
+        assert ctx.target.init_system == init, ctx.target.init_system
     return config
 
 
@@ -140,6 +144,9 @@ def main():
     assert arch.bootstrap_method == "pacstrap", arch.bootstrap_method
     artix = run_clean("artix", "/tmp/freedomnas-smoke-artix", host_os="gentoo", bootstrap="pacstrap")
     assert artix.bootstrap_method == "pacstrap", artix.bootstrap_method
+    # Artix asks for its init; dinit swaps the bootstrap's init packages, the
+    # service scripts (zfs-dinit, openssh-dinit, ...) and the enable command.
+    run_clean("artix", "/tmp/freedomnas-smoke-artix-dinit", host_os="gentoo", bootstrap="pacstrap", init="dinit")
 
     # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is
     # also the case where host and target edition are the same rolling distro.

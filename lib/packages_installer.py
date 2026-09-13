@@ -78,7 +78,9 @@ class PackagesInstaller:
         edition = self.config.target_os
         seen: List[str] = []
         for category in self.config.package_categories:
-            for package in self.packages.get_packages_for_os(category, edition):
+            for package in self.packages.get_packages_for_os(
+                category, edition, self.ctx.target.init_system
+            ):
                 if package not in seen:
                     seen.append(package)
         return seen
@@ -113,33 +115,42 @@ class PackagesInstaller:
                 "packages", "install", timeout=3600, package_name=" ".join(packages)
             )
         Logger.info("Packages installed")
-        self.install_aur_packages()
+        self.install_pkgbuilds()
 
-    def install_aur_packages(self) -> None:
+    def install_pkgbuilds(self) -> None:
         """
-        Build and install the packages a category takes from the AUR.
+        Clone, build and install the PKGBUILD repositories a category lists —
+        the AUR or any other git host.
 
         They come after the repository packages because they usually depend
-        on them — Artix's zfs-openrc needs the ZFS it provides init scripts
-        for — and before services are enabled, since those scripts are what
-        the services are.
+        on them — Artix's zfs-openrc and zfs-dinit need the ZFS they provide
+        service scripts for — and before services are enabled, since those
+        scripts are what the services are.
         """
         edition = self.config.target_os
-        aur: List[str] = []
+        pkgbuilds: List[Dict[str, str]] = []
         for category in self.config.package_categories:
-            for package in self.packages.get_aur_packages_for_os(category, edition):
-                if package not in aur:
-                    aur.append(package)
-        if not aur:
+            for source in self.packages.get_pkgbuilds_for_os(
+                category, edition, self.ctx.target.init_system
+            ):
+                if source not in pkgbuilds:
+                    pkgbuilds.append(source)
+        if not pkgbuilds:
             return
-        if not self.ctx.has("aur", "install"):
+        if not self.ctx.has("pkgbuild", "install"):
+            names = ", ".join(source["name"] for source in pkgbuilds)
             raise RuntimeError(
-                f"{edition} lists AUR packages ({', '.join(aur)}) "
-                "but its installer profile has no aur.install"
+                f"{edition} lists PKGBUILD repositories ({names}) "
+                "but its installer profile has no pkgbuild.install"
             )
-        for package in aur:
-            Logger.info(f"Building {package} from the AUR...")
-            self.ctx.target_run("aur", "install", timeout=1800, package_name=package)
+        for source in pkgbuilds:
+            Logger.info(f"Building {source['name']} from {source['git']}...")
+            self.ctx.target_run(
+                "pkgbuild", "install",
+                timeout=1800,
+                package_name=source["name"],
+                git_url=source["git"],
+            )
 
     def _update_cache(self, fresh_root: bool) -> None:
         Logger.info(f"Updating package cache ({self.config.target_os})...")
@@ -179,17 +190,23 @@ class PackagesInstaller:
         Enable each selected category's services through the init profile, so
         this works the same on systemd, OpenRC, runit, s6, dinit and bsd_rc.
 
+        `services.enable_offline` wins when the init profile has it: dinit's
+        plain `enable` asks the running daemon, and there is none inside the
+        chroot of a system that has not booted yet.
+
         A service that fails to enable does not stop the installation, but it
         is not swallowed either: a NAS whose Samba never starts is a NAS that
         looks installed and shares nothing.
         """
         edition = self.config.target_os
+        init_system = self.ctx.target.init_system
+        action = "enable_offline" if self.ctx.has("services", "enable_offline") else "enable"
         failed = []
         for category in self.config.package_categories:
-            for service in self.packages.get_services_for_os(category, edition):
+            for service in self.packages.get_services_for_os(category, edition, init_system):
                 Logger.info(f"Enabling service: {service}")
                 try:
-                    self.ctx.target_run("services", "enable", service_name=service)
+                    self.ctx.target_run("services", action, service_name=service)
                 except Exception as exc:
                     Logger.warn(f"Could not enable {service}: {exc}")
                     failed.append(service)

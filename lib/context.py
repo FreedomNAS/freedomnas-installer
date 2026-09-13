@@ -61,15 +61,29 @@ class ExecutionContext:
         self.host_os = self.host.os_type
         self.target_os = target_os
         self.target_root = target_root or "/"
+        # Installing onto the running system means installing for the init it
+        # actually runs, not the one the edition's profile defaults to.
+        running_init = self.host.init_system if self.target_root == "/" and not host_os else None
+        self.set_target_init(running_init)
+
+    def set_target_init(self, init_system: Optional[str]) -> None:
+        """
+        (Re)build the target engines for an init system, or for the edition's
+        default when None — the target's service commands and package lists
+        both depend on it.
+        """
         self.target = self._engine_cls.for_target(
-            target_os,
+            self.target_os,
             root=None if self.target_root == "/" else self.target_root,
+            init_system=init_system,
             profile_dir=self.profile_dir,
         )
         # Same profile as `target`, executed on the host without a chroot:
         # bootstrapping is described by the target edition but performed from
         # outside it, because the target root is still empty at that point.
-        self.staging = self._engine_cls.for_target(target_os, profile_dir=self.profile_dir)
+        self.staging = self._engine_cls.for_target(
+            self.target_os, init_system=init_system, profile_dir=self.profile_dir
+        )
 
     # ------------------------------------------------------------------
     # Command execution

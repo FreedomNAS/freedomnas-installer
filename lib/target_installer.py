@@ -67,6 +67,7 @@ class CleanInstaller:
         """Ask everything up front; touch nothing."""
         self.system.detect_boot_mode()
         self.system.load_defaults()
+        self.system.select_init_system()
 
         self.disk.select_disk()
         self.zfs.prompt_pool_name()
