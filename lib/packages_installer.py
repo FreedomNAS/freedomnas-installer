@@ -113,6 +113,33 @@ class PackagesInstaller:
                 "packages", "install", timeout=3600, package_name=" ".join(packages)
             )
         Logger.info("Packages installed")
+        self.install_aur_packages()
+
+    def install_aur_packages(self) -> None:
+        """
+        Build and install the packages a category takes from the AUR.
+
+        They come after the repository packages because they usually depend
+        on them — Artix's zfs-openrc needs the ZFS it provides init scripts
+        for — and before services are enabled, since those scripts are what
+        the services are.
+        """
+        edition = self.config.target_os
+        aur: List[str] = []
+        for category in self.config.package_categories:
+            for package in self.packages.get_aur_packages_for_os(category, edition):
+                if package not in aur:
+                    aur.append(package)
+        if not aur:
+            return
+        if not self.ctx.has("aur", "install"):
+            raise RuntimeError(
+                f"{edition} lists AUR packages ({', '.join(aur)}) "
+                "but its installer profile has no aur.install"
+            )
+        for package in aur:
+            Logger.info(f"Building {package} from the AUR...")
+            self.ctx.target_run("aur", "install", timeout=1800, package_name=package)
 
     def _update_cache(self, fresh_root: bool) -> None:
         Logger.info(f"Updating package cache ({self.config.target_os})...")
