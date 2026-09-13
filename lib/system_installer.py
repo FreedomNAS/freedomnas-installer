@@ -259,15 +259,23 @@ class SystemInstaller:
         if method == "tarball":
             self._bootstrap_tarball()
         else:
-            self.ctx.stage_run(
-                "bootstrap", method,
-                timeout=3600,
-                arch=self.config.arch,
-                suite=self.config.suite,
-                root=self.config.target_root,
-                mirror=self.config.mirror,
-            )
+            self._bootstrap_native(method)
         Logger.info("Base system installed")
+
+    def _bootstrap_native(self, method: str) -> None:
+        bootstrap_dir = Path(tempfile.mkdtemp(prefix="freedomnas-bootstrap-"))
+        variables = {
+            "arch": self.config.arch,
+            "suite": self.config.suite,
+            "root": self.config.target_root,
+            "mirror": self.config.mirror,
+            "bootstrap_dir": str(bootstrap_dir),
+        }
+        try:
+            self.ctx.write_bootstrap_files(bootstrap_dir, **variables)
+            self.ctx.stage_run("bootstrap", method, timeout=3600, **variables)
+        finally:
+            shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
     def _bootstrap_tarball(self) -> None:
         tarball = Path(tempfile.gettempdir()) / f"freedomnas-{self.config.target_os}-rootfs.tar"

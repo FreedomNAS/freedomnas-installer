@@ -134,6 +134,13 @@ def main():
     assert void.bootstrap_method == "tarball", void.bootstrap_method
     assert void.root_dataset == "fnaspool/ROOT/void", void.root_dataset
 
+    # pacstrap from a host that is not Arch, as on the live ISO: pacman.conf
+    # and the keyring come from bootstrap_files, not from the host's /etc.
+    arch = run_clean("arch", "/tmp/freedomnas-smoke-arch", host_os="gentoo", bootstrap="pacstrap")
+    assert arch.bootstrap_method == "pacstrap", arch.bootstrap_method
+    artix = run_clean("artix", "/tmp/freedomnas-smoke-artix", host_os="gentoo", bootstrap="pacstrap")
+    assert artix.bootstrap_method == "pacstrap", artix.bootstrap_method
+
     # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is
     # also the case where host and target edition are the same rolling distro.
     gentoo = run_clean("gentoo", "/tmp/freedomnas-smoke-gentoo", host_os="gentoo")

@@ -251,6 +251,21 @@ class ExecutionContext:
             dest.chmod(spec.get("mode", 0o644))
         return dest
 
+    def write_bootstrap_files(self, directory: Path, **variables: Any) -> None:
+        """
+        Render the target profile's `bootstrap_files` section into a directory
+        on the host: configuration the bootstrapper needs before the target
+        root holds anything, such as the pacman.conf pacstrap is pointed at on
+        a host that is not Arch.
+        """
+        for spec in self.target.profile.get("bootstrap_files", {}).values():
+            dest = directory / spec["path"]
+            Logger.command(f"[file] {dest}")
+            if self.dry_run:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(spec["content"].format(**variables))
+
     def ensure_target_dir(self, path: str, mode: int = 0o755) -> Path:
         dest = self.target_path(path)
         if not self.dry_run:
