@@ -123,9 +123,15 @@ class ZFSInstaller:
             force="-f" if self.config.foreign_pool_devices else "",
         )
 
-        Logger.info("Creating datasets...")
+        # The root dataset is mounted before anything else is created under
+        # it. zfs create mounts a canmount=on dataset the moment it exists:
+        # created first, home and var/log would be mounted on the empty
+        # altroot, the root dataset then mounted over them, and everything the
+        # installation writes to /home and /var/log would land in the root
+        # dataset -- hidden at boot by the real, empty ones.
+        Logger.info("Creating the boot environment...")
         self.ctx.host_run(
-            "rootpool", "create_datasets",
+            "rootpool", "create_boot_environment",
             timeout=120,
             pool_name=self.config.pool_name,
             edition=self.config.target_os,
@@ -137,6 +143,13 @@ class ZFSInstaller:
         )
         self.ctx.host_run(
             "rootpool", "mount_root",
+            pool_name=self.config.pool_name,
+            edition=self.config.target_os,
+        )
+        Logger.info("Creating datasets...")
+        self.ctx.host_run(
+            "rootpool", "create_datasets",
+            timeout=120,
             pool_name=self.config.pool_name,
             edition=self.config.target_os,
         )
