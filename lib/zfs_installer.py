@@ -186,6 +186,14 @@ class ZFSInstaller:
         settling when the export runs — so the pool list decides.
         """
         pool = self.config.pool_name
+        # Everything still mounted under the target root goes first, lazily:
+        # the ESP, the state dataset, whatever a package left bind-mounted. A
+        # plain unmount stops at the first busy mount and the export then
+        # finds the pool busy too.
+        if self.ctx.has("rootpool", "unmount_target", target=False):
+            self.ctx.host_run(
+                "rootpool", "unmount_target", check=False, root=self.config.target_root
+            )
         for action in ("export", "export_force"):
             self.ctx.host_run("rootpool", action, check=False, pool_name=pool)
             if not self._pool_is_imported(pool):
