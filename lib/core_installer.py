@@ -10,7 +10,7 @@ common/install-core.sh produces:
     /usr/lib/freedomnas/core/freedomnas/    engine, config, reconciler, ...
     /usr/lib/freedomnas/profiles/           the JSON profiles
     /usr/lib/freedomnas/webui/              FastAPI app + bin/
-    /usr/lib/python3/dist-packages/freedomnas-core.pth
+    <site-packages>/freedomnas-core.pth       wherever the target's python3 looks
 
 The source is whatever this machine already has: the installed packages
 (/usr/lib/freedomnas/...) when the installer runs from its .deb, or the
@@ -28,7 +28,6 @@ from context import ExecutionContext
 from installer_modules import Logger, Configuration
 
 _INSTALL_ROOT = "/usr/lib/freedomnas"
-_PTH_PATH = "/usr/lib/python3/dist-packages/freedomnas-core.pth"
 
 _CORE_IGNORE = shutil.ignore_patterns(
     ".git", "__pycache__", "*.pyc", "tests", "conftest.py", ".gitignore",
@@ -171,8 +170,29 @@ class CoreInstaller:
         shutil.copytree(source, dest, ignore=ignore, dirs_exist_ok=True, symlinks=True)
 
     def _write_pth(self) -> None:
-        """Put /usr/lib/freedomnas/core on the target's Python path."""
-        pth = self.ctx.target_path(_PTH_PATH)
+        """
+        Put /usr/lib/freedomnas/core on the target's Python path, for running
+        `python3 -m freedomnas` by hand.
+
+        The directory is asked of the target's own interpreter
+        (`python.site_dir`): it is /usr/lib/python3/dist-packages only on
+        Debian, and elsewhere it carries the Python version, so an upgrade
+        can leave this file behind. Nothing FreedomNAS starts depends on it —
+        firstboot.sh, supervisor.sh and the scheduled jobs set PYTHONPATH.
+        """
+        if not self.ctx.has("python", "site_dir"):
+            return
+        try:
+            stdout, _ = self.ctx.target_run("python", "site_dir", timeout=60)
+        except Exception as exc:
+            Logger.warn(f"Could not ask the target's python3 for its site-packages: {exc}")
+            return
+        site_dir = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+        if not site_dir:
+            if not self.ctx.dry_run:
+                Logger.warn("The target's python3 reported no site-packages directory")
+            return
+        pth = self.ctx.target_path(f"{site_dir}/freedomnas-core.pth")
         Logger.command(f"[file] {pth}")
         if self.ctx.dry_run:
             return
