@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, directory_exists
@@ -40,39 +40,151 @@ class DiskInstaller:
     # ------------------------------------------------------------------
 
     def select_disk(self) -> None:
-        """Present a menu of block devices; store the choice in the config."""
+        """
+        Present a menu of block devices; store the choice in the config.
+
+        A disk that belongs to an imported pool is refused: it is in use, most
+        likely by the system running the installer. A disk carrying the label
+        of a pool that is not imported (exported, another system's, an older
+        install) is only accepted after the admin confirms, by name, that the
+        pool may be destroyed.
+        """
         Logger.info("Detecting available disks...")
         disks = self._list_disks()
+        imported = self._imported_pool_devices()
 
-        items = [(d["device"], f"{d['model']} ({d['size']})") for d in disks]
+        items = []
+        for d in disks:
+            pools = sorted({pool for _, pool in self._disk_pools(d["device"])})
+            label = f"{d['model']} ({d['size']})"
+            if pools:
+                label += f" [pool: {', '.join(pools)}]"
+            items.append((d["device"], label))
         items.append(("CUSTOM", "Enter disk path manually"))
 
-        choice = self.dialog.menu(
-            "Select Installation Disk",
-            "WARNING: the selected disk will be COMPLETELY ERASED.\n"
-            "Select the disk to install FreedomNAS on:",
-            items,
-            height=22,
-            width=78,
-        )
-
-        if not choice:
-            raise RuntimeError("No disk selected — installation aborted")
-
-        if choice == "CUSTOM":
-            custom = self.dialog.inputbox(
-                "Custom Disk",
-                "Enter the full device path (e.g. /dev/sda):",
-                height=10,
-                width=60,
+        while True:
+            choice = self.dialog.menu(
+                "Select Installation Disk",
+                "WARNING: the selected disk will be COMPLETELY ERASED.\n"
+                "Select the disk to install FreedomNAS on:",
+                items,
+                height=22,
+                width=78,
             )
-            if not custom:
-                raise RuntimeError("No disk entered — installation aborted")
-            choice = custom.strip()
+
+            if not choice:
+                raise RuntimeError("No disk selected — installation aborted")
+
+            if choice == "CUSTOM":
+                custom = self.dialog.inputbox(
+                    "Custom Disk",
+                    "Enter the full device path (e.g. /dev/sda):",
+                    height=10,
+                    width=60,
+                )
+                if not custom:
+                    raise RuntimeError("No disk entered — installation aborted")
+                choice = custom.strip()
+
+            if self._accept_disk(choice, imported):
+                break
 
         self.config.disk = choice
         self.config.disk_by_id = self._resolve_by_id(choice)
         Logger.info(f"Selected disk: {self.config.disk} ({self.config.disk_by_id})")
+
+    def _accept_disk(self, disk: str, imported: Dict[str, str]) -> bool:
+        # Both sides as real paths: zpool status -L resolves /dev/mapper/x to
+        # /dev/dm-N, while lsblk keeps the mapper name.
+        devices = {os.path.realpath(dev) for dev in self._disk_devices(disk)}
+        busy = sorted({pool for dev, pool in imported.items() if os.path.realpath(dev) in devices})
+        if busy:
+            Logger.warn(f"{disk} belongs to imported pool(s): {', '.join(busy)}")
+            self.dialog.msgbox(
+                "Disk In Use",
+                f"{disk} is part of the imported pool(s):\n\n    {', '.join(busy)}\n\n"
+                "It is in use and cannot be erased. Export the pool first, "
+                "or choose another disk.",
+                13, 70,
+            )
+            return False
+
+        foreign = self._disk_pools(disk)
+        self.config.foreign_pool_devices = []
+        if not foreign:
+            return True
+
+        listing = "\n".join(f"    {pool}  ({dev})" for dev, pool in foreign)
+        if not self.dialog.defaultno(
+            "Existing ZFS Pool",
+            f"{disk} carries ZFS pool data that is not imported:\n\n{listing}\n\n"
+            "Installing here destroys these pools for good.\n"
+            "Use this disk anyway?",
+            16, 74,
+        ):
+            return False
+
+        Logger.warn(f"Destroying pool data on {disk}: {', '.join(p for _, p in foreign)}")
+        self.config.foreign_pool_devices = [dev for dev, _ in foreign]
+        return True
+
+    def _disk_devices(self, disk: str) -> List[str]:
+        """The disk and its partitions, as `partitioning.disk_pools` names them."""
+        return [dev for dev, _, _ in self._disk_members(disk)] or [disk]
+
+    def _disk_pools(self, disk: str) -> List[Tuple[str, str]]:
+        """(device, pool name) for every device on the disk carrying a ZFS label."""
+        return [(dev, label or "(unnamed)") for dev, fstype, label in self._disk_members(disk)
+                if fstype == "zfs_member"]
+
+    def _disk_members(self, disk: str) -> List[Tuple[str, str, str]]:
+        """
+        Parse `partitioning.disk_pools`: one device per line, `<device>
+        [<fstype> [<label>]]`, with spaces inside a label escaped as \\x20
+        (lsblk's raw format). A ZFS member's label is its pool's name.
+        """
+        if not self.ctx.has("partitioning", "disk_pools", target=False):
+            return []
+        try:
+            stdout, _ = self.ctx.host_run(
+                "partitioning", "disk_pools", check=False, timeout=60, disk=disk
+            )
+        except Exception as exc:
+            Logger.warn(f"Could not read the filesystems on {disk}: {exc}")
+            return []
+        members = []
+        for line in stdout.splitlines():
+            fields = line.split(" ")
+            if not fields or not fields[0]:
+                continue
+            fstype = fields[1] if len(fields) > 1 else ""
+            label = fields[2] if len(fields) > 2 else ""
+            label = label.encode().decode("unicode_escape") if "\\x" in label else label
+            members.append((fields[0], fstype, label))
+        return members
+
+    def _imported_pool_devices(self) -> Dict[str, str]:
+        """
+        Map every device used by an imported pool to that pool's name, from
+        `rootpool.imported_devices` (`zpool status -LP`: a `pool:` line, then
+        the vdev tree with resolved /dev paths).
+        """
+        if not self.ctx.has("rootpool", "imported_devices", target=False):
+            return {}
+        try:
+            stdout, _ = self.ctx.host_run("rootpool", "imported_devices", check=False, timeout=60)
+        except Exception as exc:
+            Logger.warn(f"Could not list the devices of imported pools: {exc}")
+            return {}
+        devices: Dict[str, str] = {}
+        pool = ""
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("pool:"):
+                pool = stripped.split(":", 1)[1].strip()
+            elif pool and stripped.startswith("/dev/"):
+                devices[stripped.split()[0]] = pool
+        return devices
 
     def partition_disk(self) -> None:
         """Wipe the disk and create the ESP + root-pool layout."""
@@ -82,6 +194,14 @@ class DiskInstaller:
 
         Logger.info(f"Partitioning disk: {disk}")
         esp_size = self.ctx.meta("esp_size", "512MiB")
+
+        # sgdisk --zap-all removes the partition table, not the ZFS labels
+        # inside the old partitions: left there, they make zpool create refuse
+        # the new partition and can surface as ghost pools in later imports.
+        if self.ctx.has("partitioning", "labelclear", target=False):
+            for device in self.config.foreign_pool_devices:
+                Logger.info(f"Clearing the ZFS label on {device}")
+                self.ctx.host_run("partitioning", "labelclear", device=device, check=False)
 
         self.ctx.host_run("partitioning", "wipe", disk=disk, check=False)
         self.ctx.host_run("partitioning", "clear", disk=disk)

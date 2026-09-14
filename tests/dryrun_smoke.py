@@ -118,12 +118,90 @@ def run_inplace(edition="debian"):
     return config
 
 
+def run_disk_pool_checks():
+    print("\n=== disk selection: ZFS pools already on the disks ===")
+    from disk_installer import DiskInstaller
+    from zfs_installer import ZFSInstaller
+
+    listing = {
+        ("partitioning", "list_disks"):
+            "sda 64000000000 HostDisk\nsdb 64000000000 OldNAS\nsdc 64000000000 Blank\n",
+        ("rootpool", "imported_devices"):
+            "  pool: rpool\n state: ONLINE\nconfig:\n\n\tNAME         STATE\n"
+            "\trpool        ONLINE\n\t  /dev/sda2  ONLINE\n",
+    }
+    members = {
+        "/dev/sda": "/dev/sda\n/dev/sda1 vfat EFI\n/dev/sda2 zfs_member rpool\n",
+        "/dev/sdb": "/dev/sdb\n/dev/sdb1 vfat\n/dev/sdb2 zfs_member old\\x20nas\n",
+        "/dev/sdc": "/dev/sdc\n",
+    }
+    ctx = ExecutionContext(
+        target_os="debian", target_root="/tmp/freedomnas-smoke-disks",
+        host_os="debian", dry_run=True, profile_dir=PROFILES,
+    )
+    calls = []
+    real_host_run = ctx.host_run
+
+    def host_run(category, action, *args, **kwargs):
+        calls.append((category, action, kwargs))
+        if (category, action) == ("partitioning", "disk_pools"):
+            return members[kwargs["disk"]], ""
+        if (category, action) in listing:
+            return listing[(category, action)], ""
+        return real_host_run(category, action, *args, **kwargs)
+
+    ctx.host_run = host_run
+
+    class Picker(FakeDialog):
+        choices = ["/dev/sda", "/dev/sdb"]
+        menus = []
+        boxes = []
+
+        @classmethod
+        def menu(cls, title, text, items, *args, **kwargs):
+            if title == "Select Installation Disk":
+                cls.menus.append(dict(items))
+                return cls.choices.pop(0)
+            return super().menu(title, text, items, *args, **kwargs)
+
+        @classmethod
+        def msgbox(cls, title, text, *args, **kwargs):
+            cls.boxes.append(title)
+
+    config = Configuration()
+    config.target_os = "debian"
+    config.target_root = "/tmp/freedomnas-smoke-disks"
+    DiskInstaller(Picker, config, ctx).select_disk()
+
+    labels = Picker.menus[0]
+    assert labels["/dev/sda"].endswith("[pool: rpool]"), labels
+    assert labels["/dev/sdb"].endswith("[pool: old nas]"), labels
+    assert "pool" not in labels["/dev/sdc"], labels
+    # The imported pool's disk is refused and the menu comes back.
+    assert Picker.boxes == ["Disk In Use"], Picker.boxes
+    assert len(Picker.menus) == 2
+    assert config.disk == "/dev/sdb", config.disk
+    assert config.foreign_pool_devices == ["/dev/sdb2"], config.foreign_pool_devices
+
+    DiskInstaller(Picker, config, ctx).partition_disk()
+    order = [(c, a) for c, a, _ in calls]
+    assert order.index(("partitioning", "labelclear")) < order.index(("partitioning", "wipe")), order
+    assert [k["device"] for c, a, k in calls if a == "labelclear"] == ["/dev/sdb2"]
+
+    ZFSInstaller(Picker, config, ctx).create_root_pool()
+    create = next(k for c, a, k in calls if (c, a) == ("rootpool", "create"))
+    assert create["force"] == "-f", create
+    assert ctx.host.get_command("rootpool", "create", **create).startswith("zpool create -f "), create
+
+
 def main():
     targets = ExecutionContext.available_targets(PROFILES)
     print("Editions with an installer profile:")
     for target in targets:
         print(f"  {target['edition']:<8} {target['os_family']:<6} "
               f"{target['init_system']:<8} bootstrap={target['bootstrap_methods']}")
+
+    run_disk_pool_checks()
 
     clean = run_clean("debian", "/tmp/freedomnas-smoke-root")
     assert clean.part1 == "/dev/sda1", clean.part1

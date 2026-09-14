@@ -281,6 +281,10 @@ class Configuration:
         self.disk_by_id: Optional[str] = None      # /dev/disk/by-id/...
         self.part1: Optional[str] = None           # ESP (FAT32)
         self.part2: Optional[str] = None           # rpool partition
+        # Devices on the chosen disk that carry the label of a ZFS pool which is
+        # not imported; the admin agreed to destroy them, so they are cleared
+        # before partitioning and the pool is created with -f.
+        self.foreign_pool_devices: List[str] = []
 
         # ZFS
         self.pool_name: str = "rpool"

@@ -120,6 +120,7 @@ class ZFSInstaller:
             altroot=self.config.target_root,
             pool_name=self.config.pool_name,
             device=device,
+            force="-f" if self.config.foreign_pool_devices else "",
         )
 
         Logger.info("Creating datasets...")
