@@ -123,6 +123,7 @@ class CleanInstaller:
         self.users.create_users()
 
         self.packages.install_packages(fresh_root=True)
+        self.packages.ensure_kernel_modules()
         self.packages.locale_setup()
         self.packages.enable_services()
 

@@ -152,6 +152,64 @@ class PackagesInstaller:
                 git_url=source["git"],
             )
 
+    def ensure_kernel_modules(self) -> None:
+        """
+        Check that ZFS is installed as a module for every kernel in the target,
+        rebuild it where it is not, and refuse to go on if that fails.
+
+        On the editions that build ZFS with DKMS, the package ships sources
+        only and pacman's dkms hook compiles them. That hook reports a failed
+        build as a warning and then exits 0, so pacman succeeds, the UKI is
+        built without ZFS, and the machine drops into the initramfs shell
+        looking for a root pool it cannot read — an unbootable system that
+        installed without a single error.
+
+        What fails is `make -C module/`, which reaches the top-level `gitrev`
+        target and runs scripts/make_gitrev.sh — a file the package does not
+        ship. The header that script writes is generated when the package is
+        built and is already in place, so an empty script is enough to let the
+        build finish.
+        """
+        if not (self.ctx.has("dkms", "module_present")
+                and self.ctx.has("dkms", "fix_gitrev")
+                and self.ctx.has("dkms", "autoinstall")):
+            return
+
+        for kernel_version in self._target_kernels():
+            if self._zfs_module_installed(kernel_version):
+                continue
+            Logger.warn(
+                f"No ZFS module for kernel {kernel_version} — the DKMS build "
+                f"failed; rebuilding it"
+            )
+            self.ctx.target_run("dkms", "fix_gitrev", check=False)
+            self.ctx.target_run(
+                "dkms", "autoinstall",
+                timeout=3600, check=False, kernel_version=kernel_version,
+            )
+            if not self._zfs_module_installed(kernel_version):
+                raise RuntimeError(
+                    f"ZFS is not installed as a module for kernel "
+                    f"{kernel_version}. The build log is in the target under "
+                    f"/var/lib/dkms/zfs/*/build/make.log. Installing further "
+                    f"would produce a system that cannot boot."
+                )
+            Logger.info(f"ZFS module installed for kernel {kernel_version}")
+
+    def _target_kernels(self) -> List[str]:
+        modules_dir = self.ctx.target_path("/lib/modules")
+        if not modules_dir.is_dir():
+            return []
+        return sorted(p.name for p in modules_dir.iterdir() if (p / "kernel").is_dir())
+
+    def _zfs_module_installed(self, kernel_version: str) -> bool:
+        if self.ctx.dry_run:
+            return True
+        stdout, _ = self.ctx.target_run(
+            "dkms", "module_present", check=False, kernel_version=kernel_version
+        )
+        return bool(stdout.strip())
+
     def _update_cache(self, fresh_root: bool) -> None:
         Logger.info(f"Updating package cache ({self.config.target_os})...")
         if fresh_root and self.ctx.has("bootstrap", "update_cache"):
