@@ -19,6 +19,15 @@ from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration
 
 _MIN_PASSWORD_LENGTH = 8
+_CONTROL_CHARS = "\n\r\0"
+
+
+def _credentials_problem(username: str, password: str) -> str:
+    if ":" in username or any(c in username for c in _CONTROL_CHARS):
+        return "The username may not contain ':' or control characters."
+    if any(c in password for c in _CONTROL_CHARS):
+        return "The password may not contain line breaks or control characters."
+    return ""
 
 
 class UsersInstaller:
@@ -42,7 +51,7 @@ class UsersInstaller:
             height=10,
             width=60,
         )
-        if username and username.strip():
+        if username and username.strip() and not _credentials_problem(username.strip(), ""):
             self.config.username = username.strip()
 
         self.config.user_password = self._prompt_password(self.config.username)
@@ -65,6 +74,10 @@ class UsersInstaller:
             if not username or not username.strip():
                 continue
             username = username.strip()
+            problem = _credentials_problem(username, "")
+            if problem:
+                self.dialog.msgbox("Invalid Username", problem)
+                continue
 
             wants_sudo = self.dialog.yesno(
                 "Administrative Access",
@@ -96,6 +109,11 @@ class UsersInstaller:
                 self.dialog.msgbox("Password Mismatch", "The passwords do not match.")
                 continue
 
+            problem = _credentials_problem(username, first)
+            if problem:
+                self.dialog.msgbox("Invalid Password", problem)
+                continue
+
             if len(first) < _MIN_PASSWORD_LENGTH:
                 self.dialog.msgbox(
                     "Password Too Short",
@@ -121,6 +139,9 @@ class UsersInstaller:
             self._create_user(user["username"], user["password"], groups=groups)
 
     def _create_user(self, username: str, password: str, groups: List[str]) -> None:
+        problem = _credentials_problem(username, password)
+        if problem:
+            raise ValueError(f"{username!r}: {problem}")
         Logger.info(f"Creating user: {username}")
 
         if groups:
