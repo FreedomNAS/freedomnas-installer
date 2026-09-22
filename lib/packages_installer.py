@@ -116,6 +116,38 @@ class PackagesInstaller:
             )
         Logger.info("Packages installed")
         self.install_pkgbuilds()
+        self.join_admin_groups()
+
+    def join_admin_groups(self) -> None:
+        """
+        Put the administrator in the groups a selected category needs.
+
+        Docker's socket belongs to the `docker` group: without it every
+        update run ends with `permission denied while trying to connect to
+        the docker API`, because topgrade's containers step talks to the
+        daemon as the signed-in user. This is not a widening of what that
+        account can do — `files.sudoers` already gives its group
+        `NOPASSWD: ALL` so that topgrade can update the system at all.
+
+        The groups are created by the packages that own them, so this comes
+        after the installation, never before.
+        """
+        username = self.config.username
+        if not username:
+            return
+        edition = self.config.target_os
+        groups: List[str] = []
+        for category in self.config.package_categories:
+            for group in self.packages.get_admin_groups_for_os(
+                category, edition, self.ctx.target.init_system
+            ):
+                if group not in groups:
+                    groups.append(group)
+        for group in groups:
+            Logger.info(f"Adding {username} to the '{group}' group...")
+            self.ctx.target_run(
+                "users", "add_to_group", check=False, username=username, group=group
+            )
 
     def install_pkgbuilds(self) -> None:
         """
