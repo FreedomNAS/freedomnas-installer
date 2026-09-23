@@ -58,6 +58,14 @@ class CoreInstaller:
             self._check_existing_install()
             return
 
+        # An edition that packages FreedomNAS has already installed it with
+        # everything else, from its own repository: copying the live image's
+        # copy over the packaged one would leave apt owning files that no
+        # longer match what it installed.
+        if self.ctx.meta("core_packages"):
+            self._check_existing_install()
+            return
+
         core_src, profiles_src, webui_src = self._sources()
 
         Logger.info(f"Installing freedomnas-core from {core_src}")
@@ -77,28 +85,47 @@ class CoreInstaller:
 
     def _check_existing_install(self) -> None:
         """
-        In-place mode installs no files of its own: FreedomNAS is expected to
-        be here already, through the distribution's packages. Say which piece
-        is missing instead of leaving the WebUI to fail at boot with an
-        import error nobody can trace back to here.
+        Nothing to copy: FreedomNAS is expected to be there already, from the
+        distribution's packages. That is the case in-place — the running
+        system is one someone already installed the packages on — and on an
+        edition whose `installer_meta.core_packages` put them in with the
+        rest. Say which piece is missing instead of leaving the WebUI to fail
+        at boot with an import error nobody can trace back to here.
+
+        The core is checked by importing it rather than by looking for a
+        directory: a packaged core lives wherever that distribution keeps
+        Python modules (Debian: /usr/lib/python3/dist-packages), not under
+        /usr/lib/freedomnas.
         """
+        in_place = self.ctx.target_root == "/"
         expected = {
-            "freedomnas-core": Path(f"{_INSTALL_ROOT}/core/freedomnas"),
-            "freedomnas-profiles": Path(self.ctx.profiles),
-            "freedomnas-webui": Path(f"{_INSTALL_ROOT}/webui/api"),
+            "freedomnas-profiles": Path(self.ctx.profiles) if in_place
+            else self.ctx.target_path(f"{_INSTALL_ROOT}/profiles"),
+            "freedomnas-webui": Path(f"{_INSTALL_ROOT}/webui/api") if in_place
+            else self.ctx.target_path(f"{_INSTALL_ROOT}/webui/api"),
         }
         missing = [name for name, path in expected.items() if not path.is_dir()]
+        if not self._core_importable():
+            missing.insert(0, "freedomnas-core")
 
         if not missing:
-            Logger.info("In-place mode — FreedomNAS is already installed on this system")
+            Logger.info("FreedomNAS comes from the distribution's packages — nothing to copy")
             return
 
-        Logger.warn(
-            "Not installed on this system: " + ", ".join(missing)
-        )
-        Logger.warn(
-            "Install those packages too, or the WebUI will not start at boot"
-        )
+        Logger.warn("Not installed on this system: " + ", ".join(missing))
+        Logger.warn("Install those packages too, or the WebUI will not start at boot")
+
+    def _core_importable(self) -> bool:
+        """True when the target's own python3 finds freedomnas."""
+        if self.ctx.dry_run:
+            return True
+        if not self.ctx.has("python", "import_check"):
+            # No way to ask: fall back to the layout the installer copies.
+            root = Path(f"{_INSTALL_ROOT}/core/freedomnas") if self.ctx.target_root == "/" \
+                else self.ctx.target_path(f"{_INSTALL_ROOT}/core/freedomnas")
+            return root.is_dir()
+        stdout, _ = self.ctx.target_run("python", "import_check", check=False)
+        return bool(stdout.strip())
 
     def install_firstboot(self) -> None:
         """
