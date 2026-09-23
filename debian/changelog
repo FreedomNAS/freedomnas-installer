@@ -1,4 +1,4 @@
-freedomnas-installer (4.0.0-1) unstable; urgency=medium
+freedomnas-installer (1.0-1) unstable; urgency=medium
 
   * Initial release
   * ZFS-on-root installer: disk partitioning, ZFS pool/dataset setup,
@@ -7,4 +7,4 @@ freedomnas-installer (4.0.0-1) unstable; urgency=medium
     via efibootmgr on UEFI or via Clover on legacy BIOS
   * Replaces the previous GRUB + bpool boot chain
 
- -- FreedomNAS Team <dev@freedomnas.io>  Thu, 16 Jul 2026 15:00:00 +0000
+ -- FreedomNAS Team <dev@freedomnas.io>  Wed, 23 Sep 2026 08:00:00 +0000

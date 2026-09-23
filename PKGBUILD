@@ -1,6 +1,6 @@
 # Maintainer: FreedomNAS Team <dev@freedomnas.io>
 pkgname=freedomnas-installer
-pkgver=4.0.0
+pkgver=1.0
 pkgrel=1
 pkgdesc="Profile-driven FreedomNAS installer (clean install or in-place)"
 arch=('any')
