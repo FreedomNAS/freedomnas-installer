@@ -38,6 +38,24 @@ from typing import Dict, List, Optional, Tuple
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "lib"))
 
+# Every administrative tool this installer runs — useradd, chpasswd, zpool,
+# sgdisk — lives in a sbin directory, and not every host puts those on PATH:
+# a merged-/usr distribution such as Gentoo drops them, since there they are
+# symlinks to /usr/bin. That is not a local problem. `chroot` looks the
+# command up with the PATH it inherits, but after changing root, so an
+# installer running with Gentoo's PATH asked a Debian target for
+# /usr/bin/useradd — which on Debian is /usr/sbin/useradd — and got
+# "chroot: failed to run command 'useradd': No such file or directory".
+# Editions where /usr/sbin is a symlink hid it. Same reasoning as the PATH
+# in the WebUI's firstboot.sh, and it applies before the first command runs.
+# The host's own PATH keeps its order and its extra directories; only the
+# standard ones it lacks are appended.
+_PATH = os.environ.get("PATH", "").split(os.pathsep)
+for _dir in ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"):
+    if _dir not in _PATH:
+        _PATH.append(_dir)
+os.environ["PATH"] = os.pathsep.join(p for p in _PATH if p)
+
 import corelink
 from context import ExecutionContext
 from installer_modules import (
