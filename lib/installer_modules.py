@@ -300,6 +300,7 @@ class Configuration:
         self.suite: str = ""
         self.mirror: str = ""
         self.rootfs_url: str = ""
+        self.extra_tarball_urls: List[str] = []
 
         # System
         self.hostname: str = "freedomnas"

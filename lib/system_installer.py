@@ -82,6 +82,7 @@ class SystemInstaller:
         self.config.suite = self.ctx.meta("suite", "")
         self.config.mirror = self.ctx.meta("mirror", "")
         self.config.rootfs_url = self.ctx.meta("rootfs_tarball_url", "")
+        self.config.extra_tarball_urls = list(self.ctx.meta("extra_tarball_urls", []))
 
     def select_init_system(self) -> None:
         """
@@ -304,23 +305,30 @@ class SystemInstaller:
             shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
     def _bootstrap_tarball(self) -> None:
-        tarball = Path(tempfile.gettempdir()) / f"freedomnas-{self.config.target_os}-rootfs.tar"
-        Logger.info(f"Fetching rootfs tarball: {self.config.rootfs_url}")
-        self.ctx.stage_run(
-            "bootstrap", "fetch_tarball",
-            timeout=3600,
-            url=self.config.rootfs_url,
-            output=str(tarball),
-        )
-        Logger.info("Unpacking rootfs tarball...")
-        self.ctx.stage_run(
-            "bootstrap", "unpack_tarball",
-            timeout=3600,
-            tarball=str(tarball),
-            root=self.config.target_root,
-        )
-        if not self.ctx.dry_run:
-            tarball.unlink(missing_ok=True)
+        """
+        Unpack the rootfs, then any `installer_meta.extra_tarball_urls` over
+        it: a system whose release is split into sets — FreeBSD's base.txz
+        carries no kernel, kernel.txz does — needs more than one.
+        """
+        urls = [self.config.rootfs_url] + self.config.extra_tarball_urls
+        for index, url in enumerate(urls):
+            tarball = Path(tempfile.gettempdir()) / f"freedomnas-{self.config.target_os}-rootfs-{index}.tar"
+            Logger.info(f"Fetching tarball: {url}")
+            self.ctx.stage_run(
+                "bootstrap", "fetch_tarball",
+                timeout=3600,
+                url=url,
+                output=str(tarball),
+            )
+            Logger.info(f"Unpacking {url.rsplit('/', 1)[-1]}...")
+            self.ctx.stage_run(
+                "bootstrap", "unpack_tarball",
+                timeout=3600,
+                tarball=str(tarball),
+                root=self.config.target_root,
+            )
+            if not self.ctx.dry_run:
+                tarball.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # Configuration and chroot
