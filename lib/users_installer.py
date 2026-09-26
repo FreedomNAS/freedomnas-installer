@@ -138,6 +138,20 @@ class UsersInstaller:
             groups = [sudo_group] if user.get("sudo") else []
             self._create_user(user["username"], user["password"], groups=groups)
 
+    def lock_root(self) -> None:
+        """
+        Lock root on a freshly installed system, when the edition says how.
+
+        FreeBSD's base.txz ships root with an empty password, so the console
+        would log anyone in as root; debootstrap and the Linux stage tarballs
+        leave it locked already, and declare nothing. The administrator uses
+        sudo. Only for a clean install: a running system's root is its
+        owner's business.
+        """
+        if self.ctx.has("users", "lock_root"):
+            Logger.info("Locking the root account")
+            self.ctx.target_run("users", "lock_root")
+
     def _create_user(self, username: str, password: str, groups: List[str]) -> None:
         problem = _credentials_problem(username, password)
         if problem:

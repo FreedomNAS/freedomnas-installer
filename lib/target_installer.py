@@ -121,6 +121,7 @@ class CleanInstaller:
         # Users before packages: PAM/Samba must find the accounts already
         # there when those services are first configured.
         self.users.create_users()
+        self.users.lock_root()
 
         self.packages.install_packages(fresh_root=True)
         self.packages.ensure_kernel_modules()
