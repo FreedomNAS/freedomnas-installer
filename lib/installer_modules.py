@@ -94,7 +94,7 @@ class Logger:
 
 class DialogManager:
     """
-    TUI dialogs via `dialog` (preferred) or `whiptail` (fallback).
+    TUI dialogs via `dialog` (preferred, `cdialog` on FreeBSD) or `whiptail` (fallback).
 
     dialog writes the user's selection to stderr, so all methods read from
     stderr. The display is drawn directly on /dev/tty, so stdin/stdout are
@@ -107,11 +107,11 @@ class DialogManager:
     def _get_backend(cls) -> str:
         if cls._backend:
             return cls._backend
-        for prog in ("dialog", "whiptail"):
+        for prog in ("dialog", "cdialog", "whiptail"):
             if shutil.which(prog):
                 cls._backend = prog
                 return prog
-        raise RuntimeError("Neither dialog nor whiptail found on PATH")
+        raise RuntimeError("None of dialog, cdialog or whiptail found on PATH")
 
     @staticmethod
     def _printable(value: str) -> str:
