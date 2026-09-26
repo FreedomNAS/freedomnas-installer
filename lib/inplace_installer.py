@@ -122,11 +122,11 @@ class InPlaceInstaller:
         """
         pools = self._list_pools()
         if not pools:
-            Logger.warn("No ZFS pools found — configuration will be stored under /etc/freedomnas")
+            Logger.warn(f"No ZFS pools found — configuration will be stored under {self.ctx.config_dir}")
             return None
 
         items = [(pool, f"Store FreedomNAS state on {pool}") for pool in pools]
-        items.append(("NONE", "Do not use a pool — store under /etc/freedomnas"))
+        items.append(("NONE", f"Do not use a pool — store under {self.ctx.config_dir}"))
 
         choice = self.dialog.menu(
             "Configuration Storage",
@@ -156,7 +156,7 @@ class InPlaceInstaller:
             f"Root       : {self.config.detected_root_dataset or 'not on ZFS'}\n"
             f"Features   : {', '.join(self.config.package_categories)}\n"
             f"Admin      : {self.config.username if self._create_admin else 'existing accounts'}\n"
-            f"State      : {self._state_pool + '/.freedomnas' if self._state_pool else StateWriter.fallback_path()}\n\n"
+            f"State      : {self._state_pool + '/.freedomnas' if self._state_pool else self.state.fallback_path()}\n\n"
             "FreedomNAS will be installed onto THIS running system.\n"
             "Packages will be installed and services enabled. Continue?"
         )
@@ -223,9 +223,9 @@ class InPlaceInstaller:
         if self._state_pool:
             self.config.pool_name = self._state_pool
             if not self.state.ensure_state_dataset(self._state_pool):
-                state_path = StateWriter.fallback_path()
+                state_path = self.state.fallback_path()
         else:
-            state_path = StateWriter.fallback_path()
+            state_path = self.state.fallback_path()
 
         self.state.save(state_path)
 

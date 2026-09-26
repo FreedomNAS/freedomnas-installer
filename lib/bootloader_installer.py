@@ -150,7 +150,7 @@ class BootloaderInstaller:
         What the hook needs to know about *this* installation: the pool is
         named by the person installing, and the UKI filenames by the edition.
         """
-        conf = self.ctx.target_path("/etc/freedomnas/uki.conf")
+        conf = self.ctx.target_path(f"{self.ctx.config_dir}/uki.conf")
         Logger.command(f"[file] {conf}")
         if self.ctx.dry_run:
             return

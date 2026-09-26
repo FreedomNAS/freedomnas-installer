@@ -6,9 +6,11 @@ command comes from the engine, every persisted state change from
 ConfigurationManager, every package list from PackageManager. The two ways
 it can be present are:
 
-  1. installed  — /usr/lib/freedomnas/core/freedomnas/ (the .deb/PKGBUILD
-                  layout, on sys.path via freedomnas-core.pth), imported as
-                  the `freedomnas` package
+  1. installed  — <install_root>/core/freedomnas/ (the layout every package
+                  uses, on sys.path via freedomnas-core.pth), imported as
+                  the `freedomnas` package. This file is
+                  <install_root>/installer/lib/corelink.py, so the root is
+                  found from here, whatever the edition made it
   2. dev tree   — checked out as a sibling directory of this repo, where the
                   modules are importable as plain top-level names (`engine`,
                   `config`, ...), the same way freedomnas-core's own tests
@@ -26,8 +28,11 @@ from typing import Any
 
 _REPO_DIR = Path(__file__).resolve().parent.parent
 
+INSTALL_ROOT = _REPO_DIR.parent
+"""This machine's <install_root>, when the installer runs installed."""
+
 _SEARCH_PATHS = [
-    Path("/usr/lib/freedomnas/core"),          # system install (package layout)
+    INSTALL_ROOT / "core",                     # system install (package layout)
     _REPO_DIR.parent / "freedomnas-core",      # dev sibling repo (flat layout)
 ]
 
@@ -92,7 +97,7 @@ def find_profiles_dir() -> Path:
     which profiles are in play.
     """
     candidates = [
-        Path("/usr/lib/freedomnas/profiles"),
+        INSTALL_ROOT / "profiles",
         _REPO_DIR.parent / "freedomnas-profiles",
     ]
     for candidate in candidates:

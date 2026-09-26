@@ -22,11 +22,6 @@ import corelink
 from context import ExecutionContext
 from installer_modules import Logger, Configuration
 
-_STATE_DIR = "/etc/freedomnas/state"
-_STATE_FILE = f"{_STATE_DIR}/config.yaml"
-_FALLBACK_FILE = "/etc/freedomnas/config.yaml"
-
-
 class StateWriter:
     """Writes the installation's desired state to the FreedomNAS config file."""
 
@@ -53,7 +48,7 @@ class StateWriter:
         self.ctx.host_run("rootpool", "mount_dataset", check=False, dataset=dataset)
         if self.ctx.dry_run:
             return
-        mountpoint = self.ctx.target_path(_STATE_DIR)
+        mountpoint = self.ctx.target_path(self.state_dir())
         if not os.path.ismount(mountpoint):
             Logger.error(
                 f"{dataset} is not mounted at {mountpoint}.\n"
@@ -88,7 +83,7 @@ class StateWriter:
 
     def save(self, state_path: Optional[str] = None) -> Optional[Path]:
         """Write hostname, users, pool, features and the initialized marker."""
-        path = self.ctx.target_path(state_path or _STATE_FILE)
+        path = self.ctx.target_path(state_path or f"{self.state_dir()}/config.yaml")
         Logger.info(f"Saving installation configuration to {path}")
 
         if self.ctx.dry_run:
@@ -145,7 +140,10 @@ class StateWriter:
             Logger.warn(f"Could not save installation config: {exc}")
             return None
 
-    @staticmethod
-    def fallback_path() -> str:
+    def state_dir(self) -> str:
+        """Where the target edition mounts the .freedomnas dataset."""
+        return f"{self.ctx.config_dir}/state"
+
+    def fallback_path(self) -> str:
         """Where state goes when no pool can host the .freedomnas dataset."""
-        return _FALLBACK_FILE
+        return f"{self.ctx.config_dir}/config.yaml"

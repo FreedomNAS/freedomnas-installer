@@ -9,7 +9,7 @@ from an image expose an identical layout to the reconciler:
   rpool/ROOT/<edition>       OS root, mountpoint=/
   rpool/home
   rpool/var, rpool/var/log
-  rpool/.freedomnas          canmount=noauto, /etc/freedomnas/state
+  rpool/.freedomnas          canmount=noauto, <config_dir>/state
 
 A single, full-featured pool — no GRUB-compatible bpool, because nothing at
 boot time reads ZFS directly (the UKI's dracut initramfs does, with the full

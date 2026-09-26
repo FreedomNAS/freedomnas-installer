@@ -7,13 +7,16 @@ it installs *the core* — engine, profiles, WebUI — into the target using the
 exact layout ARCHITECTURE.md defines and freedomnas-image-builder's
 common/install-core.sh produces:
 
-    /usr/lib/freedomnas/core/freedomnas/    engine, config, reconciler, ...
-    /usr/lib/freedomnas/profiles/           the JSON profiles
-    /usr/lib/freedomnas/webui/              FastAPI app + bin/
-    <site-packages>/freedomnas-core.pth       wherever the target's python3 looks
+    <install_root>/core/freedomnas/    engine, config, reconciler, ...
+    <install_root>/profiles/           the JSON profiles
+    <install_root>/webui/              FastAPI app + bin/
+    <site-packages>/freedomnas-core.pth  wherever the target's python3 looks
+
+<install_root> is the target edition's, from its OS profile's `paths`:
+/usr/lib/freedomnas on Linux, /usr/local/lib/freedomnas on FreeBSD.
 
 The source is whatever this machine already has: the installed packages
-(/usr/lib/freedomnas/...) when the installer runs from its .deb, or the
+(this machine's own <install_root>) when the installer runs installed, or the
 sibling repo checkouts in a development tree. Copying is plain file I/O —
 no rsync dependency, nothing to translate per OS.
 """
@@ -24,10 +27,9 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
+import corelink
 from context import ExecutionContext
 from installer_modules import Logger, Configuration
-
-_INSTALL_ROOT = "/usr/lib/freedomnas"
 
 _CORE_IGNORE = shutil.ignore_patterns(
     ".git", "__pycache__", "*.pyc", "tests", "conftest.py", ".gitignore",
@@ -68,15 +70,17 @@ class CoreInstaller:
 
         core_src, profiles_src, webui_src = self._sources()
 
+        root = self.ctx.install_root
+
         Logger.info(f"Installing freedomnas-core from {core_src}")
-        self._copy(core_src, self.ctx.target_path(f"{_INSTALL_ROOT}/core/freedomnas"), _CORE_IGNORE)
+        self._copy(core_src, self.ctx.target_path(f"{root}/core/freedomnas"), _CORE_IGNORE)
 
         Logger.info(f"Installing freedomnas-profiles from {profiles_src}")
-        self._copy(profiles_src, self.ctx.target_path(f"{_INSTALL_ROOT}/profiles"), _PROFILES_IGNORE)
+        self._copy(profiles_src, self.ctx.target_path(f"{root}/profiles"), _PROFILES_IGNORE)
 
         if webui_src is not None:
             Logger.info(f"Installing freedomnas-webui from {webui_src}")
-            self._copy(webui_src, self.ctx.target_path(f"{_INSTALL_ROOT}/webui"), _WEBUI_IGNORE)
+            self._copy(webui_src, self.ctx.target_path(f"{root}/webui"), _WEBUI_IGNORE)
         else:
             Logger.warn("freedomnas-webui not found — the WebUI will have to be installed later")
 
@@ -93,16 +97,14 @@ class CoreInstaller:
         at boot with an import error nobody can trace back to here.
 
         The core is checked by importing it rather than by looking for a
-        directory: a packaged core lives wherever that distribution keeps
-        Python modules (Debian: /usr/lib/python3/dist-packages), not under
-        /usr/lib/freedomnas.
+        directory: that is what proves the .pth file is in place too.
         """
         in_place = self.ctx.target_root == "/"
+        root = self.ctx.install_root
         expected = {
             "freedomnas-profiles": Path(self.ctx.profiles) if in_place
-            else self.ctx.target_path(f"{_INSTALL_ROOT}/profiles"),
-            "freedomnas-webui": Path(f"{_INSTALL_ROOT}/webui/api") if in_place
-            else self.ctx.target_path(f"{_INSTALL_ROOT}/webui/api"),
+            else self.ctx.target_path(f"{root}/profiles"),
+            "freedomnas-webui": self.ctx.target_path(f"{root}/webui/api"),
         }
         missing = [name for name, path in expected.items() if not path.is_dir()]
         if not self._core_importable():
@@ -121,9 +123,7 @@ class CoreInstaller:
             return True
         if not self.ctx.has("python", "import_check"):
             # No way to ask: fall back to the layout the installer copies.
-            root = Path(f"{_INSTALL_ROOT}/core/freedomnas") if self.ctx.target_root == "/" \
-                else self.ctx.target_path(f"{_INSTALL_ROOT}/core/freedomnas")
-            return root.is_dir()
+            return self.ctx.target_path(f"{self.ctx.install_root}/core/freedomnas").is_dir()
         stdout, _ = self.ctx.target_run("python", "import_check", check=False)
         return bool(stdout.strip())
 
@@ -138,7 +138,7 @@ class CoreInstaller:
         with the images freedomnas-image-builder produces.
         """
         assets = self.ctx.assets_dir
-        bin_dir = self.ctx.ensure_target_dir(f"{_INSTALL_ROOT}/webui/bin")
+        bin_dir = self.ctx.ensure_target_dir(f"{self.ctx.install_root}/webui/bin")
 
         for script in ("firstboot.sh", "supervisor.sh"):
             source = assets / script
@@ -168,7 +168,7 @@ class CoreInstaller:
         layout first, the sibling development checkouts second.
         """
         repo_parent = Path(__file__).resolve().parent.parent.parent
-        installed = Path(_INSTALL_ROOT)
+        installed = corelink.INSTALL_ROOT
 
         core = installed / "core" / "freedomnas"
         if not core.is_dir():
@@ -198,7 +198,7 @@ class CoreInstaller:
 
     def _write_pth(self) -> None:
         """
-        Put /usr/lib/freedomnas/core on the target's Python path, for running
+        Put <install_root>/core on the target's Python path, for running
         `python3 -m freedomnas` by hand.
 
         The directory is asked of the target's own interpreter
@@ -224,4 +224,4 @@ class CoreInstaller:
         if self.ctx.dry_run:
             return
         pth.parent.mkdir(parents=True, exist_ok=True)
-        pth.write_text(f"{_INSTALL_ROOT}/core\n")
+        pth.write_text(f"{self.ctx.install_root}/core\n")

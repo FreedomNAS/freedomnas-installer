@@ -172,7 +172,10 @@ and **freedomnas-profiles**. `--dry-run` requires none of them.
 
 Debian (`debian/`) and Arch (`PKGBUILD`), installing to
 `/usr/lib/freedomnas/installer/{setup.py,lib/}` with a
-`/usr/bin/freedomnas-install` symlink. Boot-chain assets are **not** vendored
+`/usr/bin/freedomnas-install` symlink; FreeBSD's package (freedomnas-freebsd)
+uses `/usr/local/lib/freedomnas/installer`. The installer finds the core and
+the profiles relative to its own location, and writes into a target where
+that target's OS profile (`paths.install_root`, `paths.config_dir`) says. Boot-chain assets are **not** vendored
 here — they come from `freedomnas-profiles/assets/` (Clover,
 `zz-dracut-uki`, `firstboot.sh`, `supervisor.sh`), shared with
 freedomnas-image-builder so there is one copy, not two.

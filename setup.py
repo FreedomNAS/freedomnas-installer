@@ -353,7 +353,7 @@ def main() -> int:
             "FreedomNAS has been installed on this system.\n\n"
             "The WebUI starts at the next boot (cron @reboot -> firstboot.sh),\n"
             "or immediately with:\n\n"
-            "  /usr/lib/freedomnas/webui/bin/firstboot.sh &",
+            f"  {ctx.install_root}/webui/bin/firstboot.sh &",
             14, 70,
         )
 

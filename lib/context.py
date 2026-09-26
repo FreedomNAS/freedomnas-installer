@@ -182,6 +182,16 @@ class ExecutionContext:
         """Read a value from the target profile's installer_meta section."""
         return self.target.profile.get("installer_meta", {}).get(key, default)
 
+    @property
+    def install_root(self) -> str:
+        """Where the target edition keeps FreedomNAS itself (its OS profile's paths)."""
+        return self.target.profile["paths"]["install_root"]
+
+    @property
+    def config_dir(self) -> str:
+        """Where the target edition keeps FreedomNAS's configuration."""
+        return self.target.profile["paths"]["config_dir"]
+
     def host_meta(self, key: str, default: Any = None) -> Any:
         """Read a value from the host profile's installer_meta section."""
         return self.host.profile.get("installer_meta", {}).get(key, default)
@@ -234,6 +244,7 @@ class ExecutionContext:
                 f"Profile '{self.target_os}' declares no files.{name} entry"
             )
 
+        variables = {"install_root": self.install_root, "config_dir": self.config_dir, **variables}
         dest = self.target_path(spec["path"].format(**variables))
         Logger.command(f"[file] {dest}")
 
