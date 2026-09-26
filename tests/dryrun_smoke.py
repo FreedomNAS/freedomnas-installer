@@ -83,6 +83,7 @@ def run_clean(target_os, target_root, host_os="debian", bootstrap=None, init=Non
     FakeDialog.text_answers = {
         "Rootfs Tarball": f"https://example.invalid/{target_os}-rootfs.tar.xz",
         "Root Pool Name": "fnaspool",
+        "Release": "15.1-RELEASE",
     }
     config = Configuration()
     config.target_os = target_os

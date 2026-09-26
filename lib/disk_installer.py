@@ -206,6 +206,12 @@ class DiskInstaller:
         self.ctx.host_run("partitioning", "wipe", disk=disk, check=False)
         self.ctx.host_run("partitioning", "clear", disk=disk)
         self.ctx.host_run("partitioning", "create_esp", disk=disk, esp_size=esp_size)
+        # BIOS boot code, for editions whose firmware path needs its own
+        # partition (FreeBSD's gptzfsboot). Before the root partition, which
+        # takes the rest of the disk; the profile gives it an index after the
+        # pool's, so the ESP stays partition 1 and the pool partition 2.
+        if self.ctx.has("partitioning", "create_bios_boot", target=False):
+            self.ctx.host_run("partitioning", "create_bios_boot", disk=disk)
         self.ctx.host_run("partitioning", "create_root", disk=disk)
 
         if self.ctx.has("partitioning", "probe", target=False):

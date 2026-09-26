@@ -80,9 +80,41 @@ class SystemInstaller:
         """Seed the configuration from the target profile's installer_meta."""
         self.config.arch = self.ctx.meta("arch", self.config.arch)
         self.config.suite = self.ctx.meta("suite", "")
-        self.config.mirror = self.ctx.meta("mirror", "")
-        self.config.rootfs_url = self.ctx.meta("rootfs_tarball_url", "")
-        self.config.extra_tarball_urls = list(self.ctx.meta("extra_tarball_urls", []))
+        if not self.config.suite and self.ctx.has("bootstrap", "latest_suite"):
+            self.config.suite = self._latest_suite()
+
+        # The URLs may name the release as {suite}: an edition that follows
+        # the newest release keeps no version in its profile at all.
+        release = {"arch": self.config.arch, "suite": self.config.suite}
+        self.config.mirror = self.ctx.meta("mirror", "").format(**release)
+        self.config.rootfs_url = self.ctx.meta("rootfs_tarball_url", "").format(**release)
+        self.config.extra_tarball_urls = [
+            url.format(**release) for url in self.ctx.meta("extra_tarball_urls", [])
+        ]
+
+    def _latest_suite(self) -> str:
+        """
+        Ask the edition's mirror for its newest release, through the
+        profile's `bootstrap.latest_suite`; ask the user when there is no
+        answer (no network yet, a mirror that lists nothing).
+        """
+        stdout, _ = self.ctx.stage_run(
+            "bootstrap", "latest_suite", timeout=120, check=False, arch=self.config.arch,
+        )
+        suite = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+        if suite:
+            Logger.info(f"Newest {self.config.target_os} release: {suite}")
+            return suite
+        answer = self.dialog.inputbox(
+            "Release",
+            f"The newest {self.config.target_os} release could not be looked up.\n"
+            "Which release should be installed?",
+            height=10,
+            width=70,
+        )
+        if not answer or not answer.strip():
+            raise RuntimeError("No release to install — installation aborted")
+        return answer.strip()
 
     def select_init_system(self) -> None:
         """

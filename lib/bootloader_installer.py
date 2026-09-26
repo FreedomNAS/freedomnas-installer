@@ -169,11 +169,10 @@ class BootloaderInstaller:
         self.ctx.ensure_target_dir(f"{_ESP_IN_TARGET}/EFI/BOOT")
         if self.ctx.has("bootloader", "install_efi_loader"):
             self.ctx.target_run("bootloader", "install_efi_loader", esp_mount=_ESP_IN_TARGET)
-        if self.ctx.has("bootloader", "install_gptzfsboot") and self.config.boot_mode == "BIOS":
-            self.ctx.target_run(
-                "bootloader", "install_gptzfsboot",
-                part_num=2, disk=self.config.disk,
-            )
+        # Both boot paths, whatever this machine booted with: the disk then
+        # starts under BIOS and UEFI alike, as the image does.
+        if self.ctx.has("bootloader", "install_gptzfsboot"):
+            self.ctx.target_run("bootloader", "install_gptzfsboot", disk=self.config.disk)
 
     # ------------------------------------------------------------------
     # Firmware entry points
