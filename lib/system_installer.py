@@ -26,7 +26,7 @@ from typing import List, Optional, Set
 
 from context import ExecutionContext
 from installer_modules import (
-    Logger, DialogManager, Configuration, directory_exists,
+    Logger, DialogManager, Configuration,
 )
 
 # files.webui_cron is deployed by CoreInstaller, together with the scripts
@@ -72,8 +72,18 @@ class SystemInstaller:
     # ------------------------------------------------------------------
 
     def detect_boot_mode(self) -> None:
-        """UEFI if the firmware exposes efivars, BIOS otherwise."""
-        self.config.boot_mode = "UEFI" if directory_exists("/sys/firmware/efi") else "BIOS"
+        """
+        How this machine booted, from the host profile's
+        bootloader.firmware_mode, which prints UEFI or BIOS: Linux looks for
+        /sys/firmware/efi, FreeBSD asks machdep.bootmethod.
+        """
+        mode = ""
+        if self.ctx.has("bootloader", "firmware_mode", target=False):
+            stdout, _ = self.ctx.host_run("bootloader", "firmware_mode", check=False)
+            mode = stdout.strip().upper()
+        else:
+            Logger.warn("Host profile declares no bootloader.firmware_mode — assuming BIOS")
+        self.config.boot_mode = "UEFI" if mode == "UEFI" else "BIOS"
         Logger.info(f"Boot mode detected: {self.config.boot_mode}")
 
     def load_defaults(self) -> None:
