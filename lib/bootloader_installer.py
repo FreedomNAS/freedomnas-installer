@@ -14,11 +14,15 @@ declares, not by an `if edition ==` in Python:
 On top of that, firmware decides how the ESP gets entered:
 
   UEFI  — `bootloader.efi_boot_entry` (efibootmgr) registers the loader in
-          NVRAM
+          NVRAM. The UKI is also copied to the fallback path
+          EFI/BOOT/BOOTX64.efi, so the disk boots on any UEFI machine
+          without an NVRAM entry (a flashed image, a disk moved to another
+          box) and Clover is never involved under UEFI.
   BIOS  — the vendored, hardware-validated Clover chain (boot0/boot1/boot7)
           bridges legacy BIOS into UEFI emulation. This is pure byte I/O on
           the MBR and the ESP's boot sector, so it has no profile entry —
-          same precedent as writing /etc/fstab.
+          same precedent as writing /etc/fstab. Clover is used for BIOS
+          boot only.
 
 The Clover binaries and zz-dracut-uki live in freedomnas-profiles/assets/,
 shared with freedomnas-image-builder rather than vendored twice. Do not bump
@@ -34,6 +38,7 @@ from installer_modules import Logger, DialogManager, Configuration, write_file
 
 _ESP_IN_TARGET = "/boot/efi"
 _UKI_DIR = "/EFI/Linux"
+_EFI_FALLBACK = "/EFI/BOOT/BOOTX64.efi"
 
 
 class BootloaderInstaller:
@@ -57,9 +62,10 @@ class BootloaderInstaller:
             self._build_uki()
             self._deploy_kernel_hook()
             loader_path = f"{_UKI_DIR}/{self.ctx.meta('uki_name', 'freedomnas-uki.efi')}"
+            self._install_uki_fallback(loader_path)
         else:
             self._install_native_loader()
-            loader_path = "/EFI/BOOT/BOOTX64.efi"
+            loader_path = _EFI_FALLBACK
 
         if self.config.boot_mode == "UEFI":
             self._register_efi_boot_entry(loader_path)
@@ -130,6 +136,21 @@ class BootloaderInstaller:
                     # Never fail the installation over the rescue image — but
                     # the day it is needed is the wrong day to find out.
                     Logger.warn(f"Recovery UKI not built: {exc}")
+
+    def _install_uki_fallback(self, loader_path: str) -> None:
+        """
+        The UKI is itself a UEFI application, so the firmware can start it
+        from the fallback path with no boot manager in between. Done on BIOS
+        installs too: the same disk then also boots on UEFI firmware.
+        zz-dracut-uki keeps this copy in step with every kernel update.
+        """
+        if self.ctx.dry_run:
+            Logger.command(f"[file] {loader_path} -> {_EFI_FALLBACK}")
+            return
+        esp = self.ctx.target_path(_ESP_IN_TARGET)
+        fallback = esp / _EFI_FALLBACK.lstrip("/")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(esp / loader_path.lstrip("/"), fallback)
 
     def _deploy_kernel_hook(self) -> None:
         """Rebuild the UKI automatically on every future kernel update."""
@@ -251,12 +272,21 @@ class BootloaderInstaller:
             esp.write(bytes(payload))
 
     def _copy_clover_payload(self, clover_dir: Path) -> None:
+        """
+        boot1f32alt loads the FILE `boot` from the ESP root, and that stage
+        (boot7, DUET) then starts EFI/CLOVER/CLOVERX64.efi. Clover's own
+        BOOTX64.efi is not copied: under UEFI the fallback path holds the
+        UKI (_install_uki_fallback), so Clover only ever runs from BIOS.
+        """
         esp = self.ctx.target_path(_ESP_IN_TARGET)
-        for subdir in ("boot", "EFI/CLOVER", "EFI/BOOT"):
-            (esp / subdir).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(clover_dir / "boot7", esp / "boot" / "boot7")
+        # FAT names are case-insensitive: a leftover boot/ directory (older
+        # installers put boot7 there) would stop the file from being created.
+        stale = esp / "boot"
+        if stale.is_dir():
+            shutil.rmtree(stale)
+        (esp / "EFI" / "CLOVER").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(clover_dir / "boot7", esp / "boot")
         shutil.copy2(clover_dir / "CLOVERX64.efi", esp / "EFI" / "CLOVER" / "CLOVERX64.efi")
-        shutil.copy2(clover_dir / "BOOTX64.efi", esp / "EFI" / "BOOT" / "BOOTX64.efi")
 
     def _write_clover_config(self) -> None:
         """
