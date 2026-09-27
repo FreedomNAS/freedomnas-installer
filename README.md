@@ -170,7 +170,7 @@ and **freedomnas-profiles**. `--dry-run` requires none of them.
 
 ## Packaging
 
-Debian (`debian/`) and Arch (`PKGBUILD`), installing to
+Debian (`debian/`) and Arch (the PKGBUILD in freedomnas-arch), installing to
 `/usr/lib/freedomnas/installer/{setup.py,lib/}` with a
 `/usr/bin/freedomnas-install` symlink; FreeBSD's package (freedomnas-freebsd)
 uses `/usr/local/lib/freedomnas/installer`. The installer finds the core and
