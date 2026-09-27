@@ -10,6 +10,7 @@ common/install-core.sh produces:
     <install_root>/core/freedomnas/    engine, config, reconciler, ...
     <install_root>/profiles/           the JSON profiles
     <install_root>/webui/              FastAPI app + bin/
+    <install_root>/docs/               the documentation, built, for the WebUI
     <site-packages>/freedomnas-core.pth  wherever the target's python3 looks
 
 <install_root> is the target edition's, from its OS profile's `paths`:
@@ -44,7 +45,7 @@ _WEBUI_IGNORE = shutil.ignore_patterns(
 
 
 class CoreInstaller:
-    """Copies freedomnas-core/profiles/webui into the target and wires first boot."""
+    """Copies freedomnas-core/profiles/webui/docs into the target and wires first boot."""
 
     def __init__(self, config: Configuration, ctx: ExecutionContext) -> None:
         self.config = config
@@ -55,7 +56,7 @@ class CoreInstaller:
     # ------------------------------------------------------------------
 
     def install_freedomnas(self) -> None:
-        """Deploy core, profiles and webui into the target root."""
+        """Deploy core, profiles, webui and docs into the target root."""
         if self.ctx.target_root == "/":
             self._check_existing_install()
             return
@@ -68,7 +69,7 @@ class CoreInstaller:
             self._check_existing_install()
             return
 
-        core_src, profiles_src, webui_src = self._sources()
+        core_src, profiles_src, webui_src, docs_src = self._sources()
 
         root = self.ctx.install_root
 
@@ -83,6 +84,12 @@ class CoreInstaller:
             self._copy(webui_src, self.ctx.target_path(f"{root}/webui"), _WEBUI_IGNORE)
         else:
             Logger.warn("freedomnas-webui not found — the WebUI will have to be installed later")
+
+        if docs_src is not None:
+            Logger.info(f"Installing freedomnas-docs from {docs_src}")
+            self._copy(docs_src, self.ctx.target_path(f"{root}/docs"), None)
+        else:
+            Logger.warn("freedomnas-docs not found — the WebUI will have no offline documentation")
 
         self._write_pth()
         Logger.info("FreedomNAS installed into the target")
@@ -105,6 +112,7 @@ class CoreInstaller:
             "freedomnas-profiles": Path(self.ctx.profiles) if in_place
             else self.ctx.target_path(f"{root}/profiles"),
             "freedomnas-webui": self.ctx.target_path(f"{root}/webui/api/main.py"),
+            "freedomnas-docs": self.ctx.target_path(f"{root}/docs/index.html"),
         }
         missing = [name for name, path in expected.items() if not path.exists()]
         if not self._core_importable():
@@ -162,10 +170,12 @@ class CoreInstaller:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _sources(self) -> Tuple[Path, Path, Optional[Path]]:
+    def _sources(self) -> Tuple[Path, Path, Optional[Path], Optional[Path]]:
         """
-        Resolve where core/profiles/webui are on this machine: the installed
-        layout first, the sibling development checkouts second.
+        Resolve where core/profiles/webui/docs are on this machine: the
+        installed layout first, the sibling development checkouts second. A
+        docs checkout counts only once it is built (`mkdocs build` writes
+        freedomnas-docs/site).
 
         A candidate counts only if it holds the file that proves it is a real
         copy, not just a directory: removing a package leaves its
@@ -187,12 +197,18 @@ class CoreInstaller:
         if not (webui / "api" / "main.py").is_file():
             webui = None
 
+        docs: Optional[Path] = installed / "docs"
+        if not (docs / "index.html").is_file():
+            docs = repo_parent / "freedomnas-docs" / "site"
+        if not (docs / "index.html").is_file():
+            docs = None
+
         if not (core / "__init__.py").is_file():
             raise RuntimeError(
                 "freedomnas-core not found on this system — install the "
                 "freedomnas-core package before running the installer"
             )
-        return core, profiles, webui
+        return core, profiles, webui, docs
 
     def _copy(self, source: Path, dest: Path, ignore) -> None:
         Logger.command(f"[file] {source} -> {dest}")
