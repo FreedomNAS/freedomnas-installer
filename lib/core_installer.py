@@ -104,9 +104,9 @@ class CoreInstaller:
         expected = {
             "freedomnas-profiles": Path(self.ctx.profiles) if in_place
             else self.ctx.target_path(f"{root}/profiles"),
-            "freedomnas-webui": self.ctx.target_path(f"{root}/webui/api"),
+            "freedomnas-webui": self.ctx.target_path(f"{root}/webui/api/main.py"),
         }
-        missing = [name for name, path in expected.items() if not path.is_dir()]
+        missing = [name for name, path in expected.items() if not path.exists()]
         if not self._core_importable():
             missing.insert(0, "freedomnas-core")
 
@@ -166,23 +166,28 @@ class CoreInstaller:
         """
         Resolve where core/profiles/webui are on this machine: the installed
         layout first, the sibling development checkouts second.
+
+        A candidate counts only if it holds the file that proves it is a real
+        copy, not just a directory: removing a package leaves its
+        __pycache__ directories behind, and copying that skeleton gives a
+        target whose WebUI cannot import api.main at boot.
         """
         repo_parent = Path(__file__).resolve().parent.parent.parent
         installed = corelink.INSTALL_ROOT
 
         core = installed / "core" / "freedomnas"
-        if not core.is_dir():
+        if not (core / "__init__.py").is_file():
             core = repo_parent / "freedomnas-core"
 
         profiles = self.ctx.profiles
 
         webui: Optional[Path] = installed / "webui"
-        if not webui.is_dir():
+        if not (webui / "api" / "main.py").is_file():
             webui = repo_parent / "freedomnas-webui"
-        if not webui.is_dir():
+        if not (webui / "api" / "main.py").is_file():
             webui = None
 
-        if not core.is_dir():
+        if not (core / "__init__.py").is_file():
             raise RuntimeError(
                 "freedomnas-core not found on this system — install the "
                 "freedomnas-core package before running the installer"
