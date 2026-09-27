@@ -269,6 +269,7 @@ class Configuration:
     def __init__(self) -> None:
         # Mode and target
         self.mode: str = MODE_CLEAN            # MODE_CLEAN | MODE_INPLACE
+        self.image_mode: bool = False          # a disk image: no .freedomnas, no config
         self.target_os: Optional[str] = None   # edition being installed
         self.target_root: str = "/mnt"         # "/" in in-place mode
         self.host_os: Optional[str] = None     # edition the installer runs on

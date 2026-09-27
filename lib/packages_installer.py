@@ -314,6 +314,22 @@ class PackagesInstaller:
                 f"own: {', '.join(failed)}"
             )
 
+    def disable_ssh(self) -> None:
+        """
+        A fresh system starts with SSH off: its first account has a password
+        someone chose at install time or, on an image, one printed in the
+        documentation. It is turned on from the WebUI. Some packages enable
+        their service on install (Debian's openssh-server), so it is disabled
+        explicitly rather than just left out of the services.
+        """
+        try:
+            service = self.ctx.target.get_profile_value("system", "ssh_service")
+        except Exception:
+            return
+        action = "disable_offline" if self.ctx.has("services", "disable_offline") else "disable"
+        Logger.info(f"Disabling service: {service}")
+        self.ctx.target_run("services", action, check=False, service_name=service)
+
     def locale_setup(self) -> None:
         """Generate locales where the edition needs an explicit step."""
         if self.ctx.has("bootstrap", "locale_gen"):

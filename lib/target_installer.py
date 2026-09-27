@@ -127,6 +127,7 @@ class CleanInstaller:
         self.packages.ensure_kernel_modules()
         self.packages.locale_setup()
         self.packages.enable_services()
+        self.packages.disable_ssh()
 
         self.core.install_freedomnas()
         self.core.install_firstboot()
@@ -135,6 +136,10 @@ class CleanInstaller:
         self._esp_mounted = True
         self.bootloader.install_bootloader()
 
+        if self.config.image_mode:
+            Logger.info("Disk image: no .freedomnas and no configuration, the first boot runs the setup wizard")
+            return
+        self.state.ensure_state_dataset(self.config.pool_name)
         self.state.mount_state_dataset()
         self.state.save()
 
