@@ -4,8 +4,8 @@ FreedomNAS Installer — persisting the installation to config.yaml.
 Both install modes end here. The shadow copy written to the `.freedomnas`
 dataset is what makes a FreedomNAS reinstallable: on the next boot
 firstboot.sh finds it and hands it to the reconciler
-(`reconcile --mode disaster_recovery`), which reapplies hostname, users,
-pools, shares and features to the running system. Without this step an
+(`reconcile --mode declarative`), which makes the running system match
+it: hostname, users, pools, shares and features. Without this step an
 install is a one-off; with it, it is reproducible.
 
 This is the "dual write" rule seen from the installer's side: the OS was

@@ -134,7 +134,7 @@ def _run_recovery(dialog: DialogManager) -> int:
     engine = engine_mod.get_engine()
     manager = config_mod.ConfigurationManager()
     reconciler = reconcile_mod.ReconciliationEngine(engine, manager)
-    results = reconciler.reconcile(mode="disaster_recovery")
+    results = reconciler.reconcile(mode="declarative")
 
     applied = sum(1 for r in results if r.target_state == "applied")
     failed = sum(1 for r in results if r.target_state == "failed")
