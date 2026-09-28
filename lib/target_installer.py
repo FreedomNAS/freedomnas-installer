@@ -128,6 +128,7 @@ class CleanInstaller:
         self.packages.locale_setup()
         self.packages.enable_services()
         self.packages.disable_ssh()
+        self.users.set_samba_passwords()
 
         self.core.install_freedomnas()
         self.core.install_firstboot()

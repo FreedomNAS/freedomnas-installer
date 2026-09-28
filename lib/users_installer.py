@@ -138,6 +138,30 @@ class UsersInstaller:
             groups = [sudo_group] if user.get("sudo") else []
             self._create_user(user["username"], user["password"], groups=groups)
 
+    def set_samba_passwords(self) -> None:
+        """
+        Give every account created here the same password in Samba's own
+        database, without which it cannot open a share. Runs after the
+        packages, since Samba is not there when the accounts are created.
+        """
+        if not self.ctx.has("samba", "check_installed"):
+            return
+        try:
+            self.ctx.target_run("samba", "check_installed")
+        except Exception:
+            Logger.info("Samba is not installed: no Samba passwords to set")
+            return
+        accounts = [(self.config.username, self.config.user_password or "")]
+        accounts += [(u["username"], u["password"]) for u in self.config.additional_users]
+        payload = self.ctx.target.get_profile_value("samba", "password_stdin_format")
+        for username, password in accounts:
+            Logger.info(f"Setting the Samba password of {username}")
+            self.ctx.target_run_stdin(
+                "samba", "set_user_password",
+                payload.format(username=username, password=password),
+                username=username,
+            )
+
     def lock_root(self) -> None:
         """
         Lock root on a freshly installed system, when the edition says how.

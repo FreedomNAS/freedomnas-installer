@@ -215,6 +215,7 @@ class InPlaceInstaller:
 
         if self._create_admin:
             self.users.create_users()
+            self.users.set_samba_passwords()
 
         self.core.install_freedomnas()
         self.core.install_firstboot()
