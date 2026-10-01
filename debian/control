@@ -10,7 +10,7 @@ Vcs-Git: https://codeberg.org/freedomnas/freedomnas-installer.git
 
 Package: freedomnas-installer
 Architecture: all
-Depends: ${misc:Depends}, freedomnas-core, freedomnas-profiles, python3 (>= 3.8), dialog, gdisk, dosfstools, zfsutils-linux, dracut, efibootmgr, parted, curl
+Depends: ${misc:Depends}, freedomnas-core, freedomnas-profiles, python3 (>= 3.8), dialog, gdisk, dosfstools, zfsutils-freedomnas | zfsutils-linux, dracut, efibootmgr, parted, curl
 Recommends: debootstrap
 Description: Profile-driven FreedomNAS installer
  Interactive TUI installer that provisions FreedomNAS in either of two ways:

@@ -165,7 +165,7 @@ No Python changes. If one is needed, the profile schema is missing something
 
 Root, a TUI (`dialog` or `whiptail`), the host-side tools the edition's
 `partitioning`/`bootstrap` sections name (`gdisk`, `dosfstools`,
-`zfsutils-linux`, `curl`, optionally `debootstrap`), plus **freedomnas-core**
+`zfsutils-freedomnas` (or `zfsutils-linux`), `curl`, optionally `debootstrap`), plus **freedomnas-core**
 and **freedomnas-profiles**. `--dry-run` requires none of them.
 
 ## Packaging
