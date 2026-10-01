@@ -140,6 +140,20 @@ class StateWriter:
             Logger.warn(f"Could not save installation config: {exc}")
             return None
 
+    def mark_setup_pending(self) -> None:
+        """
+        Leave the file that keeps the setup wizard in front of everything
+        until someone has set the system up: a disk image's first boot can
+        restore another system's configuration, which must not stand in for
+        that while the image's shipped password still works.
+        """
+        path = self.ctx.target_path(f"{self.ctx.config_dir}/setup-pending")
+        Logger.command(f"[file] {path}")
+        if self.ctx.dry_run:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
     def state_dir(self) -> str:
         """Where the target edition mounts the .freedomnas dataset."""
         return f"{self.ctx.config_dir}/state"

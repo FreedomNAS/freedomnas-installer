@@ -139,6 +139,7 @@ class CleanInstaller:
 
         if self.config.image_mode:
             Logger.info("Disk image: no .freedomnas and no configuration, the first boot runs the setup wizard")
+            self.state.mark_setup_pending()
             return
         self.state.ensure_state_dataset(self.config.pool_name)
         self.state.mount_state_dataset()
