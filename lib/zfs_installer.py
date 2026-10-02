@@ -110,6 +110,7 @@ class ZFSInstaller:
     def create_root_pool(self) -> None:
         """Create the pool, its datasets, and mount them under the target root."""
         device = self._pool_device()
+        self.ensure_hostid()
         Logger.info(f"Creating pool '{self.config.pool_name}' on {device}...")
 
         self.ctx.host_run(
@@ -155,6 +156,31 @@ class ZFSInstaller:
         )
         self.ctx.host_run("rootpool", "mount_all")
         Logger.info("Root pool ready")
+
+    def ensure_hostid(self) -> None:
+        """
+        Give the machine the installer runs on a hostid before the pool is
+        created, so that the pool's label carries it. A live system without
+        /etc/hostid creates pools as hostid 0; the installed system would
+        then boot with no hostid either, until something writes one (Debian's
+        zfsutils postinst does), and from then on its root pool belongs to
+        "another system" and is not imported at boot.
+        """
+        if self.ctx.has("rootpool", "hostid_ensure", target=False):
+            self.ctx.host_run("rootpool", "hostid_ensure")
+
+    def install_hostid(self) -> None:
+        """
+        Copy that hostid into the target, over any a package generated, before
+        the initramfs is built and before the pool is exported: the installed
+        system is then the system its root pool was last imported by. Every
+        machine flashed with one image shares it, which a pool only checks
+        against the hostid of whoever imported it last.
+        """
+        if not self.ctx.has("rootpool", "hostid_install"):
+            return
+        Logger.info("Giving the installed system the hostid its pool was created with...")
+        self.ctx.stage_run("rootpool", "hostid_install", root=self.config.target_root)
 
     def install_cachefile(self) -> None:
         """
