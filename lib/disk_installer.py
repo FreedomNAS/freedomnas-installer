@@ -193,7 +193,7 @@ class DiskInstaller:
             raise RuntimeError("config.disk not set — select_disk() must run first")
 
         Logger.info(f"Partitioning disk: {disk}")
-        esp_size = self.ctx.meta("esp_size", "512MiB")
+        esp_size = self.ctx.meta("esp_size", "1GiB")
 
         # sgdisk --zap-all removes the partition table, not the ZFS labels
         # inside the old partitions: left there, they make zpool create refuse
