@@ -260,7 +260,9 @@ class BootloaderInstaller:
         """
         Write boot1f32alt to the ESP's own boot sector, merging in the
         original FAT32 BIOS Parameter Block (bytes 3-89) so the volume stays
-        correctly described.
+        correctly described. FAT32 keeps a backup boot sector (BPB_BkBootSec,
+        bytes 50-51, sector 6 as mkfs.fat makes it): it gets the same
+        sector, or fsck.fat reports at every boot that the two differ.
         """
         if not self.config.part1:
             raise RuntimeError("config.part1 not set")
@@ -270,6 +272,12 @@ class BootloaderInstaller:
             payload[3:90] = original[3:90]
             esp.seek(0)
             esp.write(bytes(payload))
+            sector_size = int.from_bytes(original[11:13], "little")
+            reserved = int.from_bytes(original[14:16], "little")
+            backup = int.from_bytes(original[50:52], "little")
+            if sector_size and 0 < backup < reserved:
+                esp.seek(backup * sector_size)
+                esp.write(bytes(payload))
 
     def _copy_clover_payload(self, clover_dir: Path) -> None:
         """
