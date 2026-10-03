@@ -444,6 +444,11 @@ class SystemInstaller:
         out of the target before it boots on its own — Debian's policy-rc.d,
         which keeps package scripts from starting daemons inside the chroot.
         """
+        # The packages the install downloaded are installed now: their
+        # archives would only fill the root pool, and an image would carry
+        # them (a gigabyte of already-compressed files on Void).
+        if self.ctx.has("chroot", "clean_package_cache"):
+            self.ctx.target_run("chroot", "clean_package_cache", check=False)
         if self.ctx.has("chroot", "finalize"):
             self.ctx.target_run("chroot", "finalize", check=False)
         self.ctx.host_run("chroot", "unmount", check=False, root=self.config.target_root)

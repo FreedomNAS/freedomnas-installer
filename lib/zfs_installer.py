@@ -225,6 +225,12 @@ class ZFSInstaller:
         settling when the export runs — so the pool list decides.
         """
         pool = self.config.pool_name
+        # ZFS does not zero what it frees: an image would carry every deleted
+        # file's blocks into its compressed download. Trimmed, they become
+        # holes in the image file (the build VM's disk passes discards on).
+        if self.config.image_mode and self.ctx.has("rootpool", "trim", target=False):
+            Logger.info(f"Trimming {pool}: freed blocks leave the image")
+            self.ctx.host_run("rootpool", "trim", check=False, pool_name=pool, timeout=1800)
         # Everything still mounted under the target root goes first, lazily:
         # the ESP, the state dataset, whatever a package left bind-mounted. A
         # plain unmount stops at the first busy mount and the export then
