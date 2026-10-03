@@ -19,6 +19,7 @@ rootfs tarball needs no bootstrapper on the installer host at all.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -66,6 +67,9 @@ class SystemInstaller:
         self.dialog = dialog
         self.config = config
         self.ctx = ctx
+        # The symlink the target had at /etc/resolv.conf before the chroot
+        # borrowed the host's file ("" for none); None until it is borrowed.
+        self._resolv_conf_link: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Detection and prompts
@@ -443,6 +447,7 @@ class SystemInstaller:
         if self.ctx.has("chroot", "finalize"):
             self.ctx.target_run("chroot", "finalize", check=False)
         self.ctx.host_run("chroot", "unmount", check=False, root=self.config.target_root)
+        self._restore_resolv_conf()
 
     def _copy_resolv_conf(self) -> None:
         """
@@ -454,6 +459,26 @@ class SystemInstaller:
             return
         dest = self.ctx.target_path("/etc/resolv.conf")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.is_symlink():
+        self._resolv_conf_link = os.readlink(dest) if dest.is_symlink() else ""
+        if dest.is_symlink() or dest.exists():
             dest.unlink()
         shutil.copy2(source, dest)
+
+    def _restore_resolv_conf(self) -> None:
+        """
+        Take the host's DNS back out. Left in, an image carries its build
+        VM's resolver (10.0.2.3 under QEMU) to every machine it is written
+        to: openresolv, which dhcpcd hands the lease's servers to, does not
+        replace a resolv.conf that is already there. Only a symlink (Debian's
+        systemd-resolved stub) is put back; a plain file is not, since a
+        fresh install's holds no server, and without one the DHCP client
+        writes its own.
+        """
+        link, self._resolv_conf_link = self._resolv_conf_link, None
+        if link is None or self.ctx.dry_run:
+            return
+        dest = self.ctx.target_path("/etc/resolv.conf")
+        if dest.is_symlink() or dest.exists():
+            dest.unlink()
+        if link:
+            os.symlink(link, dest)
