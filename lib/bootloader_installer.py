@@ -59,6 +59,7 @@ class BootloaderInstaller:
         self.mount_esp()
 
         if self.ctx.has("bootloader", "build_uki"):
+            self._deploy_dracut_modules()
             self._build_uki()
             self._deploy_kernel_hook()
             loader_path = f"{_UKI_DIR}/{self.ctx.meta('uki_name', 'freedomnas-uki.efi')}"
@@ -151,6 +152,28 @@ class BootloaderInstaller:
         fallback = esp / _EFI_FALLBACK.lstrip("/")
         fallback.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(esp / loader_path.lstrip("/"), fallback)
+
+    def _deploy_dracut_modules(self) -> None:
+        """
+        FreedomNAS's own dracut modules (assets/dracut/), before the first
+        UKI is built and for every rebuild after it: 91freedomnas-rootwait
+        holds the initramfs until the root pool's disks are there, which a
+        USB stick is not when the zfs module tries its single import. The
+        profiles' uki.conf enables them.
+        """
+        source = self.assets / "dracut"
+        if not source.is_dir():
+            Logger.warn(f"dracut modules not found at {source} — skipping")
+            return
+        for module in sorted(p for p in source.iterdir() if p.is_dir()):
+            dest = self.ctx.target_path(f"/usr/lib/dracut/modules.d/{module.name}")
+            Logger.command(f"[dir] {module} -> {dest}")
+            if self.ctx.dry_run:
+                continue
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(module, dest)
+            for script in dest.glob("*.sh"):
+                script.chmod(0o755)
 
     def _deploy_kernel_hook(self) -> None:
         """Rebuild the UKI automatically on every future kernel update."""
