@@ -11,5 +11,6 @@ override_dh_install:
 	mkdir -p debian/freedomnas-installer/usr/lib/freedomnas/installer/lib
 	install -m 755 setup.py debian/freedomnas-installer/usr/lib/freedomnas/installer/setup.py
 	install -m 644 lib/*.py debian/freedomnas-installer/usr/lib/freedomnas/installer/lib/
+	[ ! -f CHANNEL ] || install -m 644 CHANNEL debian/freedomnas-installer/usr/lib/freedomnas/installer/CHANNEL
 	mkdir -p debian/freedomnas-installer/usr/bin
 	ln -sf /usr/lib/freedomnas/installer/setup.py debian/freedomnas-installer/usr/bin/freedomnas-install

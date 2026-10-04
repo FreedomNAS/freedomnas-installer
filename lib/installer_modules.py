@@ -259,6 +259,27 @@ class DialogManager:
 # Installation configuration state
 # ---------------------------------------------------------------------------
 
+CHANNELS = ("main", "dev")
+CHANNEL_FILE = Path(__file__).resolve().parent.parent / "CHANNEL"
+
+
+def read_channel() -> str:
+    """
+    The package component this installer installs from: `main` for a live
+    ISO, image or package built from the main branch, `dev` otherwise. The
+    builders write it to CHANNEL beside setup.py; a checkout without one is
+    `dev`.
+    """
+    try:
+        channel = CHANNEL_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "dev"
+    if channel not in CHANNELS:
+        Logger.warn(f"Ignoring unknown channel '{channel}' in {CHANNEL_FILE}, using dev")
+        return "dev"
+    return channel
+
+
 MODE_CLEAN = "clean"
 MODE_INPLACE = "inplace"
 
@@ -299,6 +320,7 @@ class Configuration:
         self.bootstrap_method: Optional[str] = None   # "debootstrap" | "tarball" | ...
         self.arch: str = "amd64"
         self.suite: str = ""
+        self.channel: str = read_channel()
         self.mirror: str = ""
         self.rootfs_url: str = ""
         self.extra_tarball_urls: List[str] = []

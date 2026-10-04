@@ -271,6 +271,7 @@ class PackagesInstaller:
                 timeout=900,
                 suite=self.config.suite,
                 arch=self.config.arch,
+                channel=self.config.channel,
             )
             configured = True
         return configured
