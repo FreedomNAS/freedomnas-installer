@@ -234,7 +234,7 @@ def main():
     )
     artix_runit.set_target_init("runit")
     enable = artix_runit.target.get_command("services", "enable", service_name="zed")
-    assert enable == "ln -sf /etc/runit/sv/zed /etc/runit/runsvdir/default/zed", enable
+    assert enable == "ln -sfn /etc/runit/sv/zed /etc/runit/runsvdir/default/zed", enable
     run_clean("artix", "/tmp/freedomnas-smoke-artix-runit", host_os="gentoo", bootstrap="pacstrap", init="runit")
 
     # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is

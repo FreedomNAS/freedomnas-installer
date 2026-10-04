@@ -115,6 +115,8 @@ class CleanInstaller:
 
         self.system.bootstrap_base_system()
         self.system.configure_system()
+        if self.ctx.has("bootloader", "build_uki"):
+            self.bootloader.deploy_dracut_modules()
         self._chroot_ready = True
         self.system.setup_chroot()
 

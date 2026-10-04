@@ -59,7 +59,6 @@ class BootloaderInstaller:
         self.mount_esp()
 
         if self.ctx.has("bootloader", "build_uki"):
-            self._deploy_dracut_modules()
             self._build_uki()
             self._deploy_kernel_hook()
             loader_path = f"{_UKI_DIR}/{self.ctx.meta('uki_name', 'freedomnas-uki.efi')}"
@@ -153,13 +152,15 @@ class BootloaderInstaller:
         fallback.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(esp / loader_path.lstrip("/"), fallback)
 
-    def _deploy_dracut_modules(self) -> None:
+    def deploy_dracut_modules(self) -> None:
         """
-        FreedomNAS's own dracut modules (assets/dracut/), before the first
-        UKI is built and for every rebuild after it: 91freedomnas-rootwait
+        FreedomNAS's own dracut modules (assets/dracut/): 91freedomnas-rootwait
         holds the initramfs until the root pool's disks are there, which a
         USB stick is not when the zfs module tries its single import. The
-        profiles' uki.conf enables them.
+        profiles' uki.conf enables them, and it is written with the base
+        configuration, so they must be in place before the packages: Debian's
+        dracut builds an initramfs as soon as it is configured, and stops the
+        whole package installation when a module uki.conf names is missing.
         """
         source = self.assets / "dracut"
         if not source.is_dir():
