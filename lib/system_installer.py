@@ -400,6 +400,7 @@ class SystemInstaller:
             "pool_name": self.config.pool_name,
             "edition": self.config.target_os,
             "sudo_group": self.ctx.target.get_profile_value("users", "sudo_group"),
+            "channel": self.config.channel,
         }
 
         # Every file the edition declares, except the ones another step owns.

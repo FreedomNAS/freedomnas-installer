@@ -192,6 +192,7 @@ class InPlaceInstaller:
             "pool_name": self.config.pool_name,
             "edition": self.config.target_os,
             "sudo_group": self.ctx.target.get_profile_value("users", "sudo_group"),
+            "channel": self.config.channel,
         }
 
         for name, spec in sorted(self.ctx.target.profile.get("files", {}).items()):
