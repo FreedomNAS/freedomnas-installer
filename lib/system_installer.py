@@ -473,8 +473,8 @@ class SystemInstaller:
         """
         Take the host's DNS back out. Left in, an image carries its build
         VM's resolver (10.0.2.3 under QEMU) to every machine it is written
-        to: openresolv, which dhcpcd hands the lease's servers to, does not
-        replace a resolv.conf that is already there. Only a symlink (Debian's
+        to: openresolv, which NetworkManager hands the lease's servers to,
+        does not replace a resolv.conf that is already there. Only a symlink (Debian's
         systemd-resolved stub) is put back; a plain file is not, since a
         fresh install's holds no server, and without one the DHCP client
         writes its own.
