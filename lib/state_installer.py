@@ -1,12 +1,18 @@
 """
 FreedomNAS Installer — persisting the installation to config.yaml.
 
-Both install modes end here. The shadow copy written to the `.freedomnas`
-dataset is what makes a FreedomNAS reinstallable: on the next boot
-firstboot.sh finds it and hands it to the reconciler
-(`reconcile --mode declarative`), which makes the running system match
-it: hostname, users, pools, shares and features. Without this step an
-install is a one-off; with it, it is reproducible.
+Both install modes end here, and neither creates a `.freedomnas` dataset.
+The installer's answers (hostname, users, pool, features) go to config.yaml
+in the state directory on the root filesystem, not marked initialized, and
+a setup-pending file says the system still has to be set up.
+
+On the first boot firstboot.sh looks for a `.freedomnas` dataset holding a
+configuration on every pool: one found — a data pool that outlived the old
+system — is mounted over the state directory and restored. None found, the
+setup wizard runs, and `shadow.activate` moves this config.yaml into the
+`.freedomnas` dataset it creates on the pool the administrator picks. A
+fresh root pool therefore never carries a dataset that could hide or
+compete with the one on a data pool.
 
 This is the "dual write" rule seen from the installer's side: the OS was
 changed first, and now the intent is recorded.
@@ -14,13 +20,18 @@ changed first, and now the intent is recorded.
 
 from __future__ import annotations
 
-import os
+import re
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import corelink
 from context import ExecutionContext
 from installer_modules import Logger, Configuration
+
+STATE_INSTALL = "install"
+_PROBE_PREFIX = "fnasprobe"
+
 
 class StateWriter:
     """Writes the installation's desired state to the FreedomNAS config file."""
@@ -33,56 +44,11 @@ class StateWriter:
     # Public steps
     # ------------------------------------------------------------------
 
-    def mount_state_dataset(self) -> None:
+    def save(self, state_path: Optional[str] = None, initialized: bool = True) -> Optional[Path]:
         """
-        Mount <pool>/.freedomnas — it is canmount=noauto, so `zfs mount --all`
-        deliberately leaves it alone.
-
-        The mount is checked, not assumed: save() writes config.yaml under
-        that path, and if the dataset is not there the file lands on the root
-        dataset instead. The next boot then mounts an empty .freedomnas over
-        it, finds no configuration, and runs the first-run wizard on a system
-        that was already configured.
+        Write hostname, users, pool and features, and the initialized marker
+        unless the setup wizard is still to run (`initialized=False`).
         """
-        dataset = f"{self.config.pool_name}/.freedomnas"
-        self.ctx.host_run("rootpool", "mount_dataset", check=False, dataset=dataset)
-        if self.ctx.dry_run:
-            return
-        mountpoint = self.ctx.target_path(self.state_dir())
-        if not os.path.ismount(mountpoint):
-            Logger.error(
-                f"{dataset} is not mounted at {mountpoint}.\n"
-                f"The installation's configuration would be written outside it "
-                f"and lost at the next boot."
-            )
-
-    def ensure_state_dataset(self, pool_name: str) -> bool:
-        """
-        Make sure `<pool>/.freedomnas` exists and is mounted (in-place mode,
-        where the pool already exists and was not created by us).
-
-        Returns True if the dataset is available.
-        """
-        dataset = f"{pool_name}/.freedomnas"
-        try:
-            self.ctx.host_run("rootpool", "dataset_exists", dataset=dataset, timeout=30)
-            exists = True
-        except Exception:
-            exists = False
-
-        if not exists:
-            Logger.info(f"Creating state dataset {dataset}...")
-            try:
-                self.ctx.host_run("rootpool", "create_state_dataset", pool_name=pool_name)
-            except Exception as exc:
-                Logger.warn(f"Could not create {dataset}: {exc}")
-                return False
-
-        self.ctx.host_run("rootpool", "mount_dataset", check=False, dataset=dataset)
-        return True
-
-    def save(self, state_path: Optional[str] = None) -> Optional[Path]:
-        """Write hostname, users, pool, features and the initialized marker."""
         path = self.ctx.target_path(state_path or f"{self.state_dir()}/config.yaml")
         Logger.info(f"Saving installation configuration to {path}")
 
@@ -130,29 +96,100 @@ class StateWriter:
             for category in self.config.package_categories:
                 manager.add_installed_feature(category)
 
-            manager.mark_initialized(
-                edition=self.config.target_os,
-                initialized_by="installer",
-            )
+            if initialized:
+                manager.mark_initialized(
+                    edition=self.config.target_os,
+                    initialized_by="installer",
+                )
             Logger.info("Configuration saved")
             return path
         except Exception as exc:
             Logger.warn(f"Could not save installation config: {exc}")
             return None
 
-    def mark_setup_pending(self) -> None:
+    def mark_setup_pending(self, kind: str = "") -> None:
         """
         Leave the file that keeps the setup wizard in front of everything
         until someone has set the system up: a disk image's first boot can
         restore another system's configuration, which must not stand in for
         that while the image's shipped password still works.
+
+        `kind` is written into it. An image leaves it empty — its password is
+        public and the wizard insists on a new one. An installation writes
+        STATE_INSTALL: its administrator chose the password in the installer.
         """
         path = self.ctx.target_path(f"{self.ctx.config_dir}/setup-pending")
         Logger.command(f"[file] {path}")
         if self.ctx.dry_run:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch()
+        path.write_text(f"{kind}\n" if kind else "")
+
+    def find_restorable(self, skip_disk: str = "") -> List[Dict[str, str]]:
+        """
+        Pools on this machine whose `.freedomnas` dataset holds a FreedomNAS
+        configuration: what the first boot of the installed system will
+        restore. Each pool is imported read-only under a name of our own and
+        a temporary root, so neither its name (another `rpool`) nor its
+        mountpoints can reach the running system, and exported again at once.
+        The pool on `skip_disk`, about to be erased, is left out.
+        """
+        if self.ctx.dry_run or not self.ctx.has("rootpool", "probe_import", target=False):
+            return []
+        try:
+            listing, _ = self.ctx.host_run("rootpool", "list_importable", check=False, timeout=60)
+        except Exception as exc:
+            Logger.warn(f"Could not look for existing FreedomNAS configurations: {exc}")
+            return []
+
+        skip = Path(skip_disk).name if skip_disk else ""
+        found = []
+        for index, (name, pool_id, devices) in enumerate(_importable_pools(listing)):
+            if skip and skip in devices:
+                continue
+            temp_name = f"{_PROBE_PREFIX}{index}"
+            altroot = tempfile.mkdtemp(prefix="fnas-probe-")
+            try:
+                self.ctx.host_run(
+                    "rootpool", "probe_import", timeout=120,
+                    altroot=altroot, pool_id=pool_id, temp_name=temp_name,
+                )
+            except Exception as exc:
+                Logger.warn(f"Could not look into pool {name}: {exc}")
+                _remove_empty_dir(altroot)
+                continue
+            try:
+                state = self._read_probed_state(f"{temp_name}/.freedomnas")
+                if state is not None:
+                    state["pool"] = name
+                    found.append(state)
+            finally:
+                self.ctx.host_run("rootpool", "export", check=False, pool_name=temp_name)
+                _remove_empty_dir(altroot)
+        return found
+
+    def _read_probed_state(self, dataset: str) -> Optional[Dict[str, str]]:
+        try:
+            self.ctx.host_run("rootpool", "dataset_exists", dataset=dataset, timeout=30)
+        except Exception:
+            return None
+        self.ctx.host_run("rootpool", "mount_dataset", check=False, dataset=dataset)
+        mountpoint, _ = self.ctx.host_run(
+            "rootpool", "dataset_mountpoint", check=False, dataset=dataset
+        )
+        config_file = Path(mountpoint.strip()) / "config.yaml"
+        if not config_file.is_file():
+            return None
+        try:
+            import yaml
+            data = yaml.safe_load(config_file.read_text()) or {}
+        except Exception:
+            data = {}
+        system = data.get("system") or {}
+        return {
+            "hostname": str(system.get("hostname") or "unknown"),
+            "edition": str(system.get("edition") or "unknown"),
+        }
 
     def state_dir(self) -> str:
         """Where the target edition mounts the .freedomnas dataset."""
@@ -161,3 +198,21 @@ class StateWriter:
     def fallback_path(self) -> str:
         """Where state goes when no pool can host the .freedomnas dataset."""
         return f"{self.ctx.config_dir}/config.yaml"
+
+
+def _importable_pools(listing: str) -> List[tuple]:
+    """(name, id, the rest of its block) for each pool `zpool import` lists."""
+    pools = []
+    for block in re.split(r"(?m)^\s*pool:\s*", listing)[1:]:
+        name = block.split(None, 1)[0] if block.strip() else ""
+        match = re.search(r"(?m)^\s*id:\s*(\d+)", block)
+        if name and match:
+            pools.append((name, match.group(1), block))
+    return pools
+
+
+def _remove_empty_dir(path: str) -> None:
+    try:
+        Path(path).rmdir()
+    except OSError:
+        pass

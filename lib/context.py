@@ -23,11 +23,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import corelink
 from installer_modules import Logger
+
+_HEARTBEAT_SECONDS = 60
 
 
 class ExecutionContext:
@@ -167,7 +171,28 @@ class ExecutionContext:
         if self.dry_run:
             return "", ""
 
-        return engine.execute(category, action, timeout=timeout, check=check, **kwargs)
+        shown = command if isinstance(command, str) else " && ".join(command)
+        last_output = [time.monotonic()]
+        finished = threading.Event()
+
+        def listen(stream: str, line: str) -> None:
+            last_output[0] = time.monotonic()
+            Logger.output(stream, line)
+
+        def heartbeat() -> None:
+            started = time.monotonic()
+            while not finished.wait(_HEARTBEAT_SECONDS):
+                if time.monotonic() - last_output[0] >= _HEARTBEAT_SECONDS:
+                    Logger.still_running(shown, int(time.monotonic() - started))
+
+        ticker = threading.Thread(target=heartbeat, daemon=True)
+        engine.output_listener = listen
+        ticker.start()
+        try:
+            return engine.execute(category, action, timeout=timeout, check=check, **kwargs)
+        finally:
+            finished.set()
+            engine.output_listener = None
 
     # ------------------------------------------------------------------
     # Profile access

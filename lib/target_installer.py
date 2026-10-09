@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import os
 
+import diagnostics
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, MODE_CLEAN
 from bootloader_installer import BootloaderInstaller
 from core_installer import CoreInstaller
 from disk_installer import DiskInstaller
 from packages_installer import PackagesInstaller
-from state_installer import StateWriter
+from state_installer import STATE_INSTALL, StateWriter
 from system_installer import SystemInstaller
 from users_installer import UsersInstaller
 from zfs_installer import ZFSInstaller
@@ -65,11 +66,15 @@ class CleanInstaller:
 
     def interview(self) -> None:
         """Ask everything up front; touch nothing."""
+        notice = self.ctx.meta("install_notice")
+        if notice:
+            self.dialog.msgbox(f"Installing {self.ctx.os_info()['os_name']}", notice, 16, 72)
         self.system.detect_boot_mode()
         self.system.load_defaults()
         self.system.select_init_system()
 
         self.disk.select_disk()
+        self._report_restorable_state()
         self.zfs.prompt_pool_name()
         self.system.select_bootstrap_method()
         self.system.select_mirror()
@@ -79,6 +84,29 @@ class CleanInstaller:
         self.packages.select_categories()
         self.users.prompt_admin_user()
         self.users.prompt_additional_users()
+
+    def _report_restorable_state(self) -> None:
+        """
+        Say what the first boot will bring back. The installer itself never
+        restores anything: the installed system finds the configuration on
+        its own and the setup wizard finishes the restore.
+        """
+        found = self.state.find_restorable(self.config.disk_by_id or self.config.disk or "")
+        if not found:
+            Logger.info("No FreedomNAS configuration found on other pools: the setup wizard will create one")
+            return
+        lines = "\n".join(
+            f"  {s['pool']}: {s['hostname']} ({s['edition']})" for s in found
+        )
+        Logger.info(f"FreedomNAS configuration found on: {', '.join(s['pool'] for s in found)}")
+        self.dialog.msgbox(
+            "Existing FreedomNAS Configuration",
+            f"These pools hold a FreedomNAS configuration:\n\n{lines}\n\n"
+            "Leave their disks attached: on its first boot the new system restores "
+            "the configuration (users, shares, network, settings), and the setup "
+            "wizard asks only for the administrator's password and SSH.",
+            16, 72,
+        )
 
     def confirm(self) -> bool:
         summary = (
@@ -144,9 +172,12 @@ class CleanInstaller:
             Logger.info("Disk image: no .freedomnas and no configuration, the first boot runs the setup wizard")
             self.state.mark_setup_pending()
             return
-        self.state.ensure_state_dataset(self.config.pool_name)
-        self.state.mount_state_dataset()
-        self.state.save()
+        Logger.info(
+            "No .freedomnas on the root pool: the first boot restores one found on "
+            "another pool, or the setup wizard creates it on the pool you choose"
+        )
+        self.state.save(initialized=False)
+        self.state.mark_setup_pending(STATE_INSTALL)
 
     def cleanup(self) -> None:
         """Unwind mounts and export the pool. Safe to call at any point."""
@@ -158,6 +189,8 @@ class CleanInstaller:
             self._chroot_ready = False
         if self._pool_created:
             self.zfs.export_pool()
+            if self.zfs.export_failed:
+                diagnostics.collect(self.ctx, f"the pool {self.config.pool_name} could not be exported")
             self._pool_created = False
         self._remove_target_root()
 
@@ -183,6 +216,9 @@ class CleanInstaller:
             return False
         try:
             self.execute()
+        except Exception as exc:
+            diagnostics.collect(self.ctx, f"installation step failed: {exc}", exc)
+            raise
         finally:
             self.cleanup()
         return True

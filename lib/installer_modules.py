@@ -35,6 +35,9 @@ class Logger:
     _YELLOW = "\033[1;33m"
     _BLUE   = "\033[0;34m"
     _NC     = "\033[0m"
+    _DIM    = "\033[2m"
+
+    verbose = True
 
     _logger: Optional[logging.Logger] = None
 
@@ -86,6 +89,30 @@ class Logger:
         """Log a resolved profile command before (or instead of) running it."""
         print(f"{cls._BLUE}[CMD]{cls._NC} {message}")
         cls._get().debug(f"CMD: {message}")
+
+    @classmethod
+    def output(cls, stream: str, line: str) -> None:
+        """
+        One line a running command printed: always in the log, on screen
+        unless the installer runs with --quiet.
+        """
+        if cls.verbose:
+            colour = cls._YELLOW if stream == "stderr" else cls._DIM
+            print(f"{colour}  │ {line}{cls._NC}", flush=True)
+        cls._get().debug(f"  {'!' if stream == 'stderr' else '|'} {line}")
+
+    @classmethod
+    def still_running(cls, command: str, seconds: int) -> None:
+        """A command that has printed nothing for a while is still alive."""
+        minutes, rest = divmod(seconds, 60)
+        print(f"{cls._DIM}  … still running after {minutes}m{rest:02d}s: {command[:90]}{cls._NC}", flush=True)
+        cls._get().debug(f"still running after {seconds}s: {command}")
+
+    @classmethod
+    def section(cls, title: str, body: str) -> None:
+        """A block of text for the log and the screen (diagnostics)."""
+        print(f"{cls._BLUE}=== {title} ==={cls._NC}\n{body}", flush=True)
+        cls._get().info(f"=== {title} ===\n{body}")
 
 
 # ---------------------------------------------------------------------------

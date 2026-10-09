@@ -107,15 +107,6 @@ def _make_target_root(explicit: Optional[str], dry_run: bool) -> Tuple[str, bool
     raise RuntimeError("Could not create a directory to assemble the target in")
 
 
-def _detect_existing_state(ctx: ExecutionContext) -> bool:
-    """True if an importable pool carries a .freedomnas dataset."""
-    try:
-        stdout, _ = ctx.host_run("rootpool", "list_importable", check=False, timeout=60)
-    except Exception:
-        return False
-    return ".freedomnas" in stdout
-
-
 # ---------------------------------------------------------------------------
 # Recovery
 # ---------------------------------------------------------------------------
@@ -154,13 +145,11 @@ def _run_recovery(dialog: DialogManager) -> int:
 # Menus
 # ---------------------------------------------------------------------------
 
-def _select_mode(dialog: DialogManager, recovery_available: bool) -> Optional[str]:
+def _select_mode(dialog: DialogManager) -> Optional[str]:
     items = [
         (MODE_CLEAN, "Clean install onto a disk (erases it)"),
         (MODE_INPLACE, "Install onto this running system"),
     ]
-    if recovery_available:
-        items.append(("recovery", "Restore an existing FreedomNAS configuration"))
 
     return dialog.menu(
         "FreedomNAS Installer",
@@ -223,10 +212,15 @@ def main() -> int:
         help="Resolve and print every command instead of running it",
     )
     parser.add_argument(
+        "--quiet", action="store_true",
+        help="Show only the steps, not the output of the commands (the log keeps it all)",
+    )
+    parser.add_argument(
         "--assume-host-os",
         help="Treat the host as this edition instead of detecting it (testing)",
     )
     args = parser.parse_args()
+    Logger.verbose = not args.quiet
 
     if not args.dry_run:
         check_root()
@@ -248,16 +242,7 @@ def main() -> int:
         )
         return 1
 
-    probe = ExecutionContext(
-        target_os=host.os_type,
-        target_root="/",
-        host_os=args.assume_host_os,
-        dry_run=args.dry_run,
-        profile_dir=profile_dir,
-    )
-    recovery_available = _detect_existing_state(probe)
-
-    mode = args.mode or _select_mode(dialog, recovery_available)
+    mode = args.mode or _select_mode(dialog)
     if not mode:
         Logger.warn("Nothing selected — exiting")
         return 1

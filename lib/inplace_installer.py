@@ -15,8 +15,10 @@ What happens is:
   2. their services are enabled through the init profile, so this works the
      same under systemd, OpenRC, runit, s6, dinit or bsd_rc
   3. the WebUI first-boot hook is wired up
-  4. the installation is recorded in config.yaml, on the `.freedomnas`
-     dataset of an existing pool where there is one
+  4. the installation is recorded in config.yaml in the state directory,
+     not marked initialized: the setup wizard moves it into the
+     `.freedomnas` dataset of the pool the administrator picks (on a system
+     with no pool it stays under the config directory, initialized)
 
 Because the target *is* the host, the target engine runs without a chroot
 prefix and every command lands directly on the running system.
@@ -25,13 +27,14 @@ prefix and every command lands directly on the running system.
 from __future__ import annotations
 
 import socket
-from typing import List, Optional
+from typing import List
 
+import diagnostics
 from context import ExecutionContext
 from core_installer import CoreInstaller
 from installer_modules import Logger, DialogManager, Configuration, MODE_INPLACE
 from packages_installer import PackagesInstaller
-from state_installer import StateWriter
+from state_installer import STATE_INSTALL, StateWriter
 from users_installer import UsersInstaller
 
 
@@ -51,13 +54,16 @@ class InPlaceInstaller:
         self.state = StateWriter(config, ctx)
 
         self._create_admin = False
-        self._state_pool: Optional[str] = None
+        self._has_pools = False
 
     # ------------------------------------------------------------------
     # Interview
     # ------------------------------------------------------------------
 
     def interview(self) -> None:
+        notice = self.ctx.meta("install_notice")
+        if notice:
+            self.dialog.msgbox(f"Installing {self.ctx.os_info()['os_name']}", notice, 16, 72)
         self.config.hostname = socket.gethostname() or self.config.hostname
         self.config.timezone = self._current_timezone()
         self._detect_root_dataset()
@@ -74,7 +80,7 @@ class InPlaceInstaller:
         if self._create_admin:
             self.users.prompt_admin_user()
 
-        self._state_pool = self._select_state_pool()
+        self._has_pools = bool(self._list_pools())
 
     def _detect_root_dataset(self) -> None:
         """
@@ -114,32 +120,6 @@ class InPlaceInstaller:
                 return target.split(marker, 1)[1]
         return self.config.timezone
 
-    def _select_state_pool(self) -> Optional[str]:
-        """
-        Ask which existing pool should hold the `.freedomnas` dataset. That
-        dataset is what lets this machine be rebuilt later from its own
-        configuration, so it belongs on a pool that survives a reinstall.
-        """
-        pools = self._list_pools()
-        if not pools:
-            Logger.warn(f"No ZFS pools found — configuration will be stored under {self.ctx.config_dir}")
-            return None
-
-        items = [(pool, f"Store FreedomNAS state on {pool}") for pool in pools]
-        items.append(("NONE", f"Do not use a pool — store under {self.ctx.config_dir}"))
-
-        choice = self.dialog.menu(
-            "Configuration Storage",
-            "Where should the FreedomNAS configuration dataset live?\n"
-            "(This is what disaster recovery reads on the next boot.)",
-            items,
-            height=18,
-            width=72,
-        )
-        if not choice or choice == "NONE":
-            return None
-        return choice
-
     def _list_pools(self) -> List[str]:
         try:
             stdout, _ = self.ctx.host_run("rootpool", "list_pools", check=False, timeout=60)
@@ -156,7 +136,7 @@ class InPlaceInstaller:
             f"Root       : {self.config.detected_root_dataset or 'not on ZFS'}\n"
             f"Features   : {', '.join(self.config.package_categories)}\n"
             f"Admin      : {self.config.username if self._create_admin else 'existing accounts'}\n"
-            f"State      : {self._state_pool + '/.freedomnas' if self._state_pool else self.state.fallback_path()}\n\n"
+            f"State      : {'chosen in the setup wizard' if self._has_pools else self.state.fallback_path()}\n\n"
             "FreedomNAS will be installed onto THIS running system.\n"
             "Packages will be installed and services enabled. Continue?"
         )
@@ -221,20 +201,21 @@ class InPlaceInstaller:
         self.core.install_freedomnas()
         self.core.install_firstboot()
 
-        state_path = None
-        if self._state_pool:
-            self.config.pool_name = self._state_pool
-            if not self.state.ensure_state_dataset(self._state_pool):
-                state_path = self.state.fallback_path()
+        if self._has_pools:
+            self.state.save(initialized=False)
+            self.state.mark_setup_pending(STATE_INSTALL)
         else:
-            state_path = self.state.fallback_path()
-
-        self.state.save(state_path)
+            Logger.warn(f"No ZFS pools found — configuration stored under {self.ctx.config_dir}")
+            self.state.save(self.state.fallback_path())
 
     def run(self) -> bool:
         self.interview()
         if not self.confirm():
             Logger.warn("Installation cancelled by the user")
             return False
-        self.execute()
+        try:
+            self.execute()
+        except Exception as exc:
+            diagnostics.collect(self.ctx, f"installation step failed: {exc}", exc)
+            raise
         return True
