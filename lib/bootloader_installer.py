@@ -119,6 +119,10 @@ class BootloaderInstaller:
             output_path=f"{_ESP_IN_TARGET}{_UKI_DIR}/{uki_name}",
             kernel_version=kernel_version,
         )
+        kernel_file = f"{_ESP_IN_TARGET}{_UKI_DIR}/{uki_name.removesuffix('.efi')}.kernel"
+        Logger.command(f"[file] {kernel_file}")
+        if not self.ctx.dry_run:
+            write_file(str(self.ctx.target_path(kernel_file)), f"{kernel_version}\n")
 
         if self.ctx.has("bootloader", "build_uki_recovery"):
             recovery_name = self.ctx.meta("uki_recovery_name", "")
@@ -183,11 +187,13 @@ class BootloaderInstaller:
             Logger.warn(f"Kernel hook not found at {source} — skipping")
             return
         dest = self.ctx.target_path("/etc/kernel/postinst.d/zz-dracut-uki")
-        Logger.command(f"[file] {dest}")
+        link_target = f"{self.ctx.install_root}/profiles/assets/zz-dracut-uki"
+        Logger.command(f"[link] {dest} -> {link_target}")
         if not self.ctx.dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, dest)
-            dest.chmod(0o755)
+            if dest.is_symlink() or dest.exists():
+                dest.unlink()
+            dest.symlink_to(link_target)
         self._write_uki_conf()
 
     def _write_uki_conf(self) -> None:
