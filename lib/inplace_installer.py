@@ -16,9 +16,10 @@ What happens is:
      same under systemd, OpenRC, runit, s6, dinit or bsd_rc
   3. the WebUI first-boot hook is wired up
   4. the installation is recorded in config.yaml in the state directory,
-     not marked initialized: the setup wizard moves it into the
-     `.freedomnas` dataset of the pool the administrator picks (on a system
-     with no pool it stays under the config directory, initialized)
+     not marked initialized: the first boot moves it into the root pool's
+     `.freedomnas` dataset and the setup wizard copies it to the pool the
+     administrator picks (on a system with no pool it stays under the
+     config directory, initialized)
 
 Because the target *is* the host, the target engine runs without a chroot
 prefix and every command lands directly on the running system.

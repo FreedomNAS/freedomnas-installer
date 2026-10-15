@@ -6,13 +6,12 @@ The installer's answers (hostname, users, pool, features) go to config.yaml
 in the state directory on the root filesystem, not marked initialized, and
 a setup-pending file says the system still has to be set up.
 
-On the first boot firstboot.sh looks for a `.freedomnas` dataset holding a
-configuration on every pool: one found — a data pool that outlived the old
-system — is mounted over the state directory and restored. None found, the
-setup wizard runs, and `shadow.activate` moves this config.yaml into the
-`.freedomnas` dataset it creates on the pool the administrator picks. A
-fresh root pool therefore never carries a dataset that could hide or
-compete with the one on a data pool.
+On the first boot `freedomnas state-boot` creates the root pool's
+`.freedomnas`, moves this config.yaml into it and looks for a configuration
+on every other pool: one found — a data pool that outlived the old system —
+is restored into it. None found, the setup wizard runs and copies the
+configuration to the pool the administrator picks. A data pool's copy has
+a mountpoint of its own, so it never competes with the root pool's.
 
 This is the "dual write" rule seen from the installer's side: the OS was
 changed first, and now the intent is recorded.

@@ -173,8 +173,8 @@ class CleanInstaller:
             self.state.mark_setup_pending()
             return
         Logger.info(
-            "No .freedomnas on the root pool: the first boot restores one found on "
-            "another pool, or the setup wizard creates it on the pool you choose"
+            "The first boot creates the root pool's .freedomnas and restores a "
+            "configuration found on another pool, or the setup wizard runs"
         )
         self.state.save(initialized=False)
         self.state.mark_setup_pending(STATE_INSTALL)

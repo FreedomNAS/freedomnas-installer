@@ -10,8 +10,8 @@ from an image expose an identical layout to the reconciler:
   rpool/home
   rpool/var, rpool/var/log
 
-No .freedomnas: the setup wizard creates it on the pool the administrator
-picks, or the first boot restores one found on another pool.
+No .freedomnas: the first boot creates it on the root pool and restores
+into it a configuration found on another pool, if there is one.
 
 A single, full-featured pool — no GRUB-compatible bpool, because nothing at
 boot time reads ZFS directly (the UKI's dracut initramfs does, with the full
