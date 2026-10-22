@@ -226,15 +226,15 @@ def main():
     # Artix asks for its init; dinit swaps the bootstrap's init packages, the
     # service scripts (zfs-dinit, openssh-dinit, ...) and the enable command.
     run_clean("artix", "/tmp/freedomnas-smoke-artix-dinit", host_os="gentoo", bootstrap="pacstrap", init="dinit")
-    # runit on Artix is not runit on Void: /etc/runit/sv and
-    # /etc/runit/runsvdir/default, from init/init-runit-artix.json.
+    # One runit profile for Void and Artix: in the chroot, enable_offline
+    # links whichever of /etc/sv and /etc/runit/sv holds the service.
     artix_runit = ExecutionContext(
         target_os="artix", target_root="/tmp/freedomnas-smoke-artix-runit",
         host_os="gentoo", dry_run=True, profile_dir=PROFILES,
     )
     artix_runit.set_target_init("runit")
-    enable = artix_runit.target.get_command("services", "enable", service_name="zed")
-    assert enable == "ln -sfn /etc/runit/sv/zed /etc/runit/runsvdir/default/zed", enable
+    enable = artix_runit.target.get_command("services", "enable_offline", service_name="zed")
+    assert "ln -sfn $d/zed /etc/runit/runsvdir/default/zed" in enable and "/etc/runit/sv" in enable, enable
     run_clean("artix", "/tmp/freedomnas-smoke-artix-runit", host_os="gentoo", bootstrap="pacstrap", init="runit")
 
     # Gentoo: stage3 tarball + portage + OpenRC, from a Gentoo host, which is
