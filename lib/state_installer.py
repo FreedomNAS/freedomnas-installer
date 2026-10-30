@@ -13,6 +13,12 @@ is restored into it. None found, the setup wizard runs and copies the
 configuration to the pool the administrator picks. A data pool's copy has
 a mountpoint of its own, so it never competes with the root pool's.
 
+When the administrator chose to restore one of those copies, the part of
+the restore a system can take before it runs happens here, in the chroot:
+`freedomnas restore-offline` puts the NAS's identity back and installs the
+modules the configuration uses with what they need. The first boot's
+restore then finds them in place instead of downloading them.
+
 This is the "dual write" rule seen from the installer's side: the OS was
 changed first, and now the intent is recorded.
 """
@@ -20,7 +26,9 @@ changed first, and now the intent is recorded.
 from __future__ import annotations
 
 import re
+import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -30,6 +38,10 @@ from installer_modules import Logger, Configuration
 
 STATE_INSTALL = "install"
 _PROBE_PREFIX = "fnasprobe"
+RESTORE_DIR = "/var/tmp/freedomnas-restore"
+_RELEASE_TRIES = 10
+_RELEASE_SECONDS = 3
+_KEPT = ("config.yaml", "identity")
 
 
 class StateWriter:
@@ -95,6 +107,11 @@ class StateWriter:
             for category in self.config.package_categories:
                 manager.add_installed_feature(category)
 
+            if self.config.restore:
+                manager.set("system.restore_from", self.config.restore["pool"])
+            elif self.config.restore_declined:
+                manager.set("system.restore", False)
+
             if initialized:
                 manager.mark_initialized(
                     edition=self.config.target_os,
@@ -124,14 +141,16 @@ class StateWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{kind}\n" if kind else "")
 
-    def find_restorable(self, skip_disk: str = "") -> List[Dict[str, str]]:
+    def find_restorable(self, skip_disk: str = "") -> List[Dict]:
         """
         Pools on this machine whose `.freedomnas` dataset holds a FreedomNAS
-        configuration: what the first boot of the installed system will
-        restore. Each pool is imported read-only under a name of our own and
-        a temporary root, so neither its name (another `rpool`) nor its
-        mountpoints can reach the running system, and exported again at once.
-        The pool on `skip_disk`, about to be erased, is left out.
+        configuration, newest first: what the installed system can restore.
+        Each pool is imported read-only under a name of our own and a
+        temporary root, so neither its name (another `rpool`) nor its
+        mountpoints can reach the running system, and exported again at once;
+        its config.yaml and identity are kept in a directory of their own
+        (`source`) for `restore_offline`. The pool on `skip_disk`, about to
+        be erased, is left out.
         """
         if self.ctx.dry_run or not self.ctx.has("rootpool", "probe_import", target=False):
             return []
@@ -163,11 +182,32 @@ class StateWriter:
                     state["pool"] = name
                     found.append(state)
             finally:
-                self.ctx.host_run("rootpool", "export", check=False, pool_name=temp_name)
+                self._release(temp_name, name)
                 _remove_empty_dir(altroot)
+        found.sort(key=lambda state: state["saved_at"], reverse=True)
         return found
 
-    def _read_probed_state(self, dataset: str) -> Optional[Dict[str, str]]:
+    def _release(self, temp_name: str, name: str) -> None:
+        """
+        Export a pool imported to look into it, until the pool list says it is
+        gone: just after its dataset is unmounted the export can find it busy
+        for a moment. One left imported would have every dataset mounted by
+        the `zfs mount -a` that follows the root pool's creation, so the
+        installation stops here instead, before any disk is touched.
+        """
+        actions = ["export"] * _RELEASE_TRIES + ["export_force"]
+        for action in actions:
+            self.ctx.host_run("rootpool", action, check=False, pool_name=temp_name)
+            listed, _ = self.ctx.host_run("rootpool", "list_pools", check=False)
+            if temp_name not in listed.split():
+                return
+            time.sleep(_RELEASE_SECONDS)
+        raise RuntimeError(
+            f"The pool {name}, imported as {temp_name} to look for a FreedomNAS configuration, "
+            f"could not be exported again. Run 'zpool export {temp_name}' and start the installer again."
+        )
+
+    def _read_probed_state(self, dataset: str) -> Optional[Dict]:
         try:
             self.ctx.host_run("rootpool", "dataset_exists", dataset=dataset, timeout=30)
         except Exception:
@@ -185,10 +225,58 @@ class StateWriter:
         except Exception:
             data = {}
         system = data.get("system") or {}
+        if not system.get("initialized"):
+            return None
+        source = tempfile.mkdtemp(prefix="fnas-restore-")
+        for name in _KEPT:
+            kept = config_file.parent / name
+            if kept.is_dir():
+                shutil.copytree(kept, Path(source) / name)
+            elif kept.is_file():
+                shutil.copy2(kept, Path(source) / name)
         return {
             "hostname": str(system.get("hostname") or "unknown"),
             "edition": str(system.get("edition") or "unknown"),
+            "saved_at": str(system.get("saved_at") or ""),
+            "timezone": str(system.get("timezone") or ""),
+            "admins": _admins(data.get("users") or []),
+            "features": [str(f.get("id")) for f in data.get("installed_features") or []
+                         if isinstance(f, dict) and f.get("id") and f.get("enabled", True)],
+            "modules": sorted(m for m, s in (data.get("modules") or {}).items() if isinstance(s, dict) and s),
+            "source": source,
         }
+
+    def restore_offline(self, state: Dict) -> None:
+        """
+        The chosen copy's identity and modules into the installed system,
+        through freedomnas-core inside the chroot. What fails here is left to
+        the first boot's restore, which does the same and more.
+        """
+        Logger.info(f"Restoring {state['hostname']}'s identity and modules from {state['pool']}")
+        if self.ctx.dry_run:
+            self.ctx.target_run("python", "restore_offline", check=False, source=RESTORE_DIR)
+            return
+        target = self.ctx.target_path(RESTORE_DIR)
+        try:
+            shutil.rmtree(target, ignore_errors=True)
+            shutil.copytree(state["source"], target)
+            target.chmod(0o700)
+            stdout, stderr = self.ctx.target_run(
+                "python", "restore_offline", timeout=7200, check=False, source=RESTORE_DIR,
+            )
+            for line in (stdout + stderr).splitlines():
+                if line.startswith(("FAIL", "ERROR")):
+                    Logger.warn(f"{line} — the first boot tries again")
+        except Exception as exc:
+            Logger.warn(f"Could not restore before the first boot, the first boot will: {exc}")
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+    @staticmethod
+    def discard(states: List[Dict]) -> None:
+        """Remove the copies find_restorable kept on the live system."""
+        for state in states:
+            shutil.rmtree(state.get("source") or "", ignore_errors=True)
 
     def state_dir(self) -> str:
         """Where the target edition mounts the .freedomnas dataset."""
@@ -208,6 +296,19 @@ def _importable_pools(listing: str) -> List[tuple]:
         if name and match:
             pools.append((name, match.group(1), block))
     return pools
+
+
+def _admins(users: List) -> List[str]:
+    """Administrators of a configuration, old ones that carry an admin group included."""
+    try:
+        normalize = corelink.config_module().normalize_user
+    except (corelink.CoreNotAvailable, AttributeError):
+        normalize = lambda user: user
+    names = []
+    for user in users:
+        if isinstance(user, dict) and user.get("username") and normalize(dict(user)).get("admin"):
+            names.append(str(user["username"]))
+    return names
 
 
 def _remove_empty_dir(path: str) -> None:

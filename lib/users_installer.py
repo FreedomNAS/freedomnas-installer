@@ -57,6 +57,27 @@ class UsersInstaller:
         self.config.user_password = self._prompt_password(self.config.username)
         Logger.info(f"Admin account: {self.config.username}")
 
+    def prompt_restored_admin(self, admins: List[str]) -> None:
+        """
+        The administrator a restored configuration brings, and a new password
+        for it: the copy keeps none. The other restored accounts get theirs
+        from the setup wizard on the first boot.
+        """
+        username = admins[0]
+        if len(admins) > 1:
+            chosen = self.dialog.menu(
+                "Administrator Account",
+                "The restored configuration has several administrators.\n"
+                "Which one signs in first, with the password you set now?",
+                [(name, "administrator") for name in admins],
+                height=16, width=60, list_height=6,
+            )
+            username = chosen or username
+        self.config.username = username
+        self.config.user_password = self._prompt_password(username)
+        self.config.additional_users = []
+        Logger.info(f"Admin account (restored): {username}")
+
     def prompt_additional_users(self) -> None:
         """Optionally queue extra accounts."""
         while self.dialog.yesno(

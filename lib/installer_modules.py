@@ -367,6 +367,11 @@ class Configuration:
         # Extra users added during install
         self.additional_users: List[dict] = []
 
+        # A data pool's configuration to restore (StateWriter.find_restorable),
+        # or none, with restore_declined when copies were there and refused
+        self.restore: Optional[dict] = None
+        self.restore_declined: bool = False
+
     @property
     def root_dataset(self) -> str:
         """

@@ -102,6 +102,59 @@ def run_clean(target_os, target_root, host_os="debian", bootstrap=None, init=Non
     return config
 
 
+def run_clean_restore(target_os, target_root, host_os="debian", choice="1"):
+    print(f"\n=== clean install restoring a data pool's configuration: {target_os} (choice {choice}) ===")
+    import state_installer
+
+    found = [
+        {"pool": "tank", "hostname": "box", "edition": "freebsd", "saved_at": "2026-10-29T08:00:00+00:00",
+         "timezone": "Europe/Rome", "admins": ["sarah", "luca"], "features": ["core", "samba-cifs", "bogus"],
+         "modules": ["containers", "proxy"], "source": "/nonexistent"},
+        {"pool": "backup", "hostname": "old", "edition": "debian", "saved_at": "2026-09-01T08:00:00+00:00",
+         "timezone": "UTC", "admins": ["admin"], "features": [], "modules": [], "source": "/nonexistent"},
+    ]
+    original = state_installer.StateWriter.find_restorable
+    state_installer.StateWriter.find_restorable = lambda self, skip_disk="": [dict(s) for s in found]
+    asked = []
+
+    class Restorer(FakeDialog):
+        @classmethod
+        def menu(cls, title, text, items, *args, **kwargs):
+            asked.append(title)
+            if title == "Existing FreedomNAS Configuration":
+                assert [tag for tag, _ in items] == ["1", "2", "new"], items
+                return choice
+            if title == "Administrator Account":
+                return "luca"
+            return super().menu(title, text, items, *args, **kwargs)
+
+        @classmethod
+        def inputbox(cls, title, text, init_text="", *args, **kwargs):
+            asked.append(title)
+            return super().inputbox(title, text, init_text, *args, **kwargs)
+
+        @classmethod
+        def checklist(cls, title, text, items, *args, **kwargs):
+            asked.append(title)
+            return super().checklist(title, text, items, *args, **kwargs)
+
+    Restorer.menu_answers = {"Select Installation Disk": "/dev/sda"}
+    Restorer.text_answers = {"Root Pool Name": "fnaspool", "Release": "15.1-RELEASE",
+                             "Rootfs Tarball": f"https://example.invalid/{target_os}-rootfs.tar.xz"}
+    config = Configuration()
+    config.target_os = target_os
+    config.target_root = target_root
+    ctx = ExecutionContext(target_os=target_os, target_root=target_root, host_os=host_os,
+                           dry_run=True, profile_dir=PROFILES)
+    command = ctx.target.get_command("python", "restore_offline", source="/var/tmp/freedomnas-restore")
+    assert command == "python3 -m freedomnas restore-offline --from /var/tmp/freedomnas-restore", command
+    try:
+        assert CleanInstaller(Restorer, config, ctx).run() is True
+    finally:
+        state_installer.StateWriter.find_restorable = original
+    return config, asked
+
+
 def run_inplace(edition="debian"):
     print(f"\n=== in-place install: {edition} ===")
     FakeDialog.menu_answers = {"Configuration Storage": "NONE"}
@@ -246,6 +299,26 @@ def main():
     # A BSD host sees only BSD targets, and installs them natively.
     freebsd = run_clean("freebsd", "/tmp/freedomnas-smoke-freebsd", host_os="freebsd")
     assert freebsd.bootstrap_method == "tarball", freebsd.bootstrap_method
+
+    restored, asked = run_clean_restore("debian", "/tmp/freedomnas-smoke-restore")
+    assert restored.restore["pool"] == "tank" and not restored.restore_declined
+    assert (restored.hostname, restored.timezone, restored.username) == ("box", "Europe/Rome", "luca")
+    assert restored.package_categories[0] == "core" and "samba-cifs" in restored.package_categories
+    assert "bogus" not in restored.package_categories and restored.additional_users == []
+    older_categories = run_clean_restore("debian", "/tmp/freedomnas-smoke-restore-nofeatures", choice="2")[0]
+    assert {"samba-cifs", "nfs"} <= set(older_categories.package_categories), older_categories.package_categories
+    assert {"System Hostname", "Optional Features"}.isdisjoint(asked), asked
+    older, _ = run_clean_restore("debian", "/tmp/freedomnas-smoke-restore-older", choice="2")
+    assert older.restore["pool"] == "backup" and older.username == "admin"
+    fresh, asked = run_clean_restore("debian", "/tmp/freedomnas-smoke-restore-new", choice="new")
+    assert fresh.restore is None and fresh.restore_declined
+    assert {"System Hostname", "Optional Features"} <= set(asked), asked
+    for target in targets:
+        edition = target["edition"]
+        probe = ExecutionContext(target_os=edition, target_root="/tmp/freedomnas-smoke-probe",
+                                 host_os="freebsd" if target["os_family"] == "bsd" else "debian",
+                                 dry_run=True, profile_dir=PROFILES)
+        assert probe.target.get_command("python", "restore_offline", source="/x").endswith("--from /x"), edition
 
     inplace = run_inplace()
     assert inplace.target_root == "/"

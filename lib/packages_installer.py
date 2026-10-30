@@ -21,6 +21,10 @@ from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration
 
 
+# Preselected in the features checklist, and taken along when a configuration
+# is restored: one restored from an image's wizard records no features.
+DEFAULT_OPTIONAL = ("samba-cifs", "nfs")
+
 class PackagesInstaller:
     """Selects package categories and installs them into the target."""
 
@@ -45,7 +49,7 @@ class PackagesInstaller:
         ]
 
         items = [
-            (c["id"], f"{c['name']} — {c['description'][:44]}", c["id"] in ("samba-cifs", "nfs"))
+            (c["id"], f"{c['name']} — {c['description'][:44]}", c["id"] in DEFAULT_OPTIONAL)
             for c in optional
         ]
         chosen = self.dialog.checklist(

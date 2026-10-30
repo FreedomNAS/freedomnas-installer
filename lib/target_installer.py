@@ -22,11 +22,17 @@ from installer_modules import Logger, DialogManager, Configuration, MODE_CLEAN
 from bootloader_installer import BootloaderInstaller
 from core_installer import CoreInstaller
 from disk_installer import DiskInstaller
-from packages_installer import PackagesInstaller
+from packages_installer import DEFAULT_OPTIONAL, PackagesInstaller
 from state_installer import STATE_INSTALL, StateWriter
 from system_installer import SystemInstaller
 from users_installer import UsersInstaller
 from zfs_installer import ZFSInstaller
+
+
+
+def _when(saved_at: str) -> str:
+    """A copy's saved_at (UTC, ISO) as a date and time a person reads."""
+    return saved_at[:16].replace("T", " ") + " UTC" if saved_at else "at an unknown time"
 
 
 class CleanInstaller:
@@ -74,39 +80,68 @@ class CleanInstaller:
         self.system.select_init_system()
 
         self.disk.select_disk()
-        self._report_restorable_state()
+        self._choose_restore()
         self.zfs.prompt_pool_name()
         self.system.select_bootstrap_method()
         self.system.select_mirror()
         self.system.prompt_rootfs_url()
+        restore = self.config.restore
+        if restore:
+            self._take_from_restore(restore)
+            self.users.prompt_restored_admin(restore["admins"])
+            return
         self.system.prompt_hostname()
         self.system.prompt_timezone()
         self.packages.select_categories()
         self.users.prompt_admin_user()
         self.users.prompt_additional_users()
 
-    def _report_restorable_state(self) -> None:
+    def _choose_restore(self) -> None:
         """
-        Say what the first boot will bring back. The installer itself never
-        restores anything: the installed system finds the configuration on
-        its own and the setup wizard finishes the restore.
+        A data pool that holds a FreedomNAS configuration can be restored
+        into the new system, the newest copy first. The answers it already
+        has are not asked again, and its identity and modules go in before
+        the first boot, which restores the rest as for any reinstall.
         """
         found = self.state.find_restorable(self.config.disk_by_id or self.config.disk or "")
         if not found:
             Logger.info("No FreedomNAS configuration found on other pools: the setup wizard will create one")
             return
-        lines = "\n".join(
-            f"  {s['pool']}: {s['hostname']} ({s['edition']})" for s in found
-        )
         Logger.info(f"FreedomNAS configuration found on: {', '.join(s['pool'] for s in found)}")
-        self.dialog.msgbox(
+        items = [
+            (str(index), f"{s['hostname']} ({s['edition']}) on {s['pool']}, saved {_when(s['saved_at'])}")
+            for index, s in enumerate(found, 1)
+        ] + [("new", "A new NAS: ignore these, the setup wizard runs")]
+        choice = self.dialog.menu(
             "Existing FreedomNAS Configuration",
-            f"These pools hold a FreedomNAS configuration:\n\n{lines}\n\n"
-            "Leave their disks attached: on its first boot the new system restores "
-            "the configuration (users, shares, network, settings), and the setup "
-            "wizard asks only for the administrator's password and SSH.",
-            16, 72,
+            "These pools hold a FreedomNAS configuration. Restore one into the new\n"
+            "system? Users, shares, network, apps and settings come back; you set\n"
+            "only the administrator's password. Leave the pool's disks attached.",
+            items, height=18, width=76, list_height=6,
         )
+        chosen = found[int(choice) - 1] if choice and choice.isdigit() else None
+        if chosen and not chosen["admins"]:
+            Logger.warn(f"The configuration on {chosen['pool']} has no administrator: not restored")
+            chosen = None
+        self.state.discard([s for s in found if s is not chosen])
+        self.config.restore = chosen
+        self.config.restore_declined = chosen is None
+        if chosen:
+            Logger.info(f"Restoring {chosen['hostname']} from {chosen['pool']}")
+        else:
+            Logger.info("A new NAS: the configurations found stay on their pools, untouched")
+
+    def _take_from_restore(self, restore: dict) -> None:
+        self.config.hostname = restore["hostname"]
+        if restore["timezone"]:
+            self.config.timezone = restore["timezone"]
+        categories = self.packages.packages.get_required_categories()
+        for feature in [*restore["features"], *DEFAULT_OPTIONAL]:
+            if feature not in categories and self.packages.packages.validate_category(feature):
+                categories.append(feature)
+        self.config.package_categories = categories
+        Logger.info(f"From the restored configuration: hostname {self.config.hostname}, "
+                    f"timezone {self.config.timezone}, features {', '.join(self.config.package_categories)}")
 
     def confirm(self) -> bool:
         summary = (
@@ -119,7 +154,11 @@ class CleanInstaller:
             f"Hostname   : {self.config.hostname}\n"
             f"Timezone   : {self.config.timezone}\n"
             f"Admin      : {self.config.username}\n"
-            f"Features   : {', '.join(self.config.package_categories)}\n\n"
+            f"Features   : {', '.join(self.config.package_categories)}\n"
+            + (f"Restore    : {self.config.restore['hostname']} from {self.config.restore['pool']}"
+               f" (modules: {', '.join(self.config.restore['modules']) or 'none'})\n"
+               if self.config.restore else "")
+            + "\n"
             "Proceed with the installation? Everything on the disk will be lost."
         )
         return self.dialog.defaultno("Confirm Installation", summary, 20, 76)
@@ -162,6 +201,8 @@ class CleanInstaller:
 
         self.core.install_freedomnas()
         self.core.install_firstboot()
+        if self.config.restore:
+            self.state.restore_offline(self.config.restore)
         self.zfs.install_hostid()
         self.zfs.install_cachefile()
 
@@ -181,6 +222,8 @@ class CleanInstaller:
 
     def cleanup(self) -> None:
         """Unwind mounts and export the pool. Safe to call at any point."""
+        if self.config.restore:
+            self.state.discard([self.config.restore])
         if self._esp_mounted:
             self.bootloader.unmount_esp()
             self._esp_mounted = False

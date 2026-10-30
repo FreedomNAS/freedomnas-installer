@@ -37,6 +37,7 @@ _POOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]*$")
 
 # The chroot is torn down with lazy unmounts, which complete a moment later.
 _EXPORT_SETTLE_SECONDS = 3
+_EXPORT_TRIES = 10
 
 
 class ZFSInstaller:
@@ -241,7 +242,7 @@ class ZFSInstaller:
             self.ctx.host_run(
                 "rootpool", "unmount_target", check=False, root=self.config.target_root
             )
-        for action in ("export", "export_force"):
+        for action in ("export",) * _EXPORT_TRIES + ("export_force",):
             self.ctx.host_run("rootpool", action, check=False, pool_name=pool)
             if not self._pool_is_imported(pool):
                 Logger.info(f"Pool {pool} exported")
