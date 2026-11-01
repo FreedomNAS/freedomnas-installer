@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from context import ExecutionContext
 from installer_modules import Logger, DialogManager, Configuration, directory_exists
