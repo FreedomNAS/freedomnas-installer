@@ -9,7 +9,8 @@ Two bootstrap methods, both declared per edition in
 `installer_meta.bootstrap_methods`:
 
   debootstrap  — the distro's own bootstrapper (debootstrap, pacstrap,
-                 basestrap, xbps-install -r ...) named by the profile
+                 basestrap, xbps-install -r, FreeBSD's pkg --rootdir ...)
+                 named by the profile
   tarball      — download and unpack a rootfs tarball (the distro's own
                  rootfs.tar.gz, or an exported container rootfs)
 
@@ -172,6 +173,7 @@ class SystemInstaller:
             "pacstrap": "Native bootstrapper (recommended)",
             "basestrap": "Native bootstrapper (recommended)",
             "xbps": "Native bootstrapper (recommended)",
+            "pkgbase": "Base system packages (recommended)",
             "tarball": "Download and unpack a rootfs tarball",
         }
         choice = self.dialog.menu(
@@ -353,8 +355,8 @@ class SystemInstaller:
     def _bootstrap_tarball(self) -> None:
         """
         Unpack the rootfs, then any `installer_meta.extra_tarball_urls` over
-        it: a system whose release is split into sets — FreeBSD's base.txz
-        carries no kernel, kernel.txz does — needs more than one.
+        it: a system whose release is split into several tarballs needs more
+        than one.
         """
         urls = [self.config.rootfs_url] + self.config.extra_tarball_urls
         for index, url in enumerate(urls):

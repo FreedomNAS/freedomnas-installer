@@ -362,7 +362,7 @@ class ExecutionContext:
 
         The hard limitation, stated once, here: bootstrapping a system means
         running that system's own tooling (debootstrap, pacstrap, xbps,
-        FreeBSD's base.txz + chroot), which only exists on a host of the same
+        FreeBSD's pkg --rootdir), which only exists on a host of the same
         OS family. A Linux installer installs Linux editions; installing
         FreeBSD needs a FreeBSD installer environment.
         """

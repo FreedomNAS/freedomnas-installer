@@ -102,9 +102,10 @@ Declared per edition in `installer_meta.bootstrap_methods`, filtered at
 runtime by whether the host actually has the tool
 (`installer_meta.bootstrap_tools`):
 
-- **native** — `debootstrap`, `pacstrap`, `basestrap`, `xbps-install -r`
+- **native** — `debootstrap`, `pacstrap`, `basestrap`, `xbps-install -r`,
+  and FreeBSD's `pkg --rootdir` from the FreeBSD-base repository (pkgbase)
 - **tarball** — download and unpack a rootfs tarball: the distro's own
-  `rootfs.tar.gz`/`base.txz`, or an exported container rootfs. Needs nothing
+  `rootfs.tar.gz`, or an exported container rootfs. Needs nothing
   but `curl`/`fetch` and `tar` on the host, which is what makes adding an
   edition cheap.
 

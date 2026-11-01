@@ -298,7 +298,7 @@ def main():
 
     # A BSD host sees only BSD targets, and installs them natively.
     freebsd = run_clean("freebsd", "/tmp/freedomnas-smoke-freebsd", host_os="freebsd")
-    assert freebsd.bootstrap_method == "tarball", freebsd.bootstrap_method
+    assert freebsd.bootstrap_method == "pkgbase", freebsd.bootstrap_method
 
     restored, asked = run_clean_restore("debian", "/tmp/freedomnas-smoke-restore")
     assert restored.restore["pool"] == "tank" and not restored.restore_declined
