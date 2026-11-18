@@ -1,3 +1,11 @@
+freedomnas-installer (0.9.20-1) unstable; urgency=medium
+
+  * Restore a data pool's configuration and prepare it before the first
+    boot
+  * FreeBSD installed with pkgbase
+
+ -- FreedomNAS Team <dev@freedomnas.io>  Wed, 18 Nov 2026 17:28:25 +0000
+
 freedomnas-installer (0.9.12-1) unstable; urgency=medium
 
   * Command output shown while it runs, and diagnostics saved on failure
