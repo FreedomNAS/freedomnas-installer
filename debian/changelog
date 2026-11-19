@@ -1,3 +1,9 @@
+freedomnas-installer (0.9.21-1) unstable; urgency=medium
+
+  * Links moved to GitHub
+
+ -- FreedomNAS Team <dev@freedomnas.io>  Thu, 19 Nov 2026 04:00:00 +0000
+
 freedomnas-installer (0.9.20-1) unstable; urgency=medium
 
   * Restore a data pool's configuration and prepare it before the first
