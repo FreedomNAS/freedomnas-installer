@@ -33,14 +33,14 @@ from context import ExecutionContext
 from installer_modules import Logger, Configuration
 
 _CORE_IGNORE = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", "tests", "conftest.py", ".gitignore",
+    ".git", "__pycache__", "*.pyc", "tests", "conftest.py", ".gitignore", ".github",
     "debian", "PKGBUILD", "*.egg-info",
 )
 _PROFILES_IGNORE = shutil.ignore_patterns(
-    ".git", "__pycache__", "debian", "PKGBUILD", "*.md", ".gitignore", ".forgejo",
+    ".git", "__pycache__", "debian", "PKGBUILD", "*.md", ".gitignore", ".github",
 )
 _WEBUI_IGNORE = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", ".gitignore", "debian", "PKGBUILD",
+    ".git", "__pycache__", "*.pyc", ".gitignore", ".github", "debian", "PKGBUILD",
 )
 
 
